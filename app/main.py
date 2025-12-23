@@ -1,23 +1,48 @@
 import json
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends
 from sqlalchemy.orm import Session
 
 from .db import engine, SessionLocal
-from .models import Job, Base
+from .models import Base, Job
 from .jobs import execute_job
 
+# Credit/Auth helpers (bu dosyalar repoda olmalı)
+from .auth import require_api_key
+from .credits import charge_credits, get_or_create_user, JOB_COST_CREDITS
+
+# Create tables at startup
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="QRYO API")
+app = FastAPI(title="QRYO API", version="0.2.0")
+
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-@app.post("/submit-job")
-def submit_job(background_tasks: BackgroundTasks, payload: dict = {}):
+
+@app.get("/me")
+def me(api_key: str = Depends(require_api_key)):
     db: Session = SessionLocal()
     try:
+        u = get_or_create_user(db, api_key)
+        return {"api_key": u.api_key, "credits": u.credits}
+    finally:
+        db.close()
+
+
+@app.post("/submit-job")
+def submit_job(
+    background_tasks: BackgroundTasks,
+    payload: dict = {},
+    api_key: str = Depends(require_api_key),
+):
+    db: Session = SessionLocal()
+    try:
+        # 1) Charge credits BEFORE running the job (no free runs)
+        remaining = charge_credits(db, api_key, JOB_COST_CREDITS)
+
+        # 2) Create job as pending
         job = Job(
             status="pending",
             provider="simulated",
@@ -29,15 +54,18 @@ def submit_job(background_tasks: BackgroundTasks, payload: dict = {}):
         db.commit()
         db.refresh(job)
 
-        # Run in background
+        # 3) Run in background
         background_tasks.add_task(execute_job, job.id)
 
         return {
             "job_id": job.id,
             "status": job.status,
+            "charged": JOB_COST_CREDITS,
+            "credits_left": remaining,
         }
     finally:
         db.close()
+
 
 @app.get("/jobs")
 def list_jobs():
@@ -57,6 +85,7 @@ def list_jobs():
     finally:
         db.close()
 
+
 @app.get("/jobs/{job_id}")
 def get_job(job_id: str):
     db: Session = SessionLocal()
@@ -64,6 +93,13 @@ def get_job(job_id: str):
         job = db.query(Job).filter(Job.id == job_id).first()
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
+
+        payload_obj = {}
+        if job.payload:
+            try:
+                payload_obj = json.loads(job.payload)
+            except Exception:
+                payload_obj = {}
 
         result_obj = None
         if job.result:
@@ -76,7 +112,7 @@ def get_job(job_id: str):
             "id": job.id,
             "provider": job.provider,
             "status": job.status,
-            "payload": json.loads(job.payload) if job.payload else {},
+            "payload": payload_obj,
             "result": result_obj,
             "error": job.error,
             "created_at": job.created_at,
