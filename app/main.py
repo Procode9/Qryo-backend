@@ -1,227 +1,176 @@
-import json
-import secrets
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends
+from fastapi import FastAPI, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
+from uuid import uuid4
 
-from .db import engine, SessionLocal
-from .models import Base, Job, User
-from .jobs import execute_job
-
-from .auth import require_api_key
-from .credits import charge_credits, get_or_create_user, JOB_COST_CREDITS
-from .estimation import estimate_cost
+from .db import get_db
+from .models import User, Job
 from .quota import check_and_update_daily_quota
+from .schemas import JobSubmitRequest
+from .cost import estimate_cost
 
-# Create tables
-Base.metadata.create_all(bind=engine)
+app = FastAPI(
+    title="QRYO API",
+    version="0.5.0"
+)
 
-app = FastAPI(title="QRYO API", version="0.5.0")
+
+# ------------------------
+# Helpers
+# ------------------------
+
+def get_current_user(
+    db: Session,
+    x_api_key: str = Header(..., alias="X-API-Key")
+) -> User:
+    user = db.query(User).filter(User.api_key == x_api_key).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return user
 
 
-# --------------------
+# ------------------------
 # Health
-# --------------------
+# ------------------------
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
-# --------------------
+# ------------------------
 # Register
-# --------------------
+# ------------------------
+
 @app.post("/register")
-def register():
-    """
-    Create a new user and return a random API key with initial credits.
-    """
-    db: Session = SessionLocal()
-    try:
-        api_key = secrets.token_urlsafe(24)
+def register(db: Session = Depends(get_db)):
+    api_key = str(uuid4())
 
-        user = User(api_key=api_key, credits=5)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+    user = User(
+        api_key=api_key,
+        credits=20
+    )
 
-        return {
-            "api_key": user.api_key,
-            "credits": user.credits
-        }
-    finally:
-        db.close()
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "api_key": api_key,
+        "credits": user.credits
+    }
 
 
-# --------------------
+# ------------------------
 # Me
-# --------------------
+# ------------------------
+
 @app.get("/me")
-def me(api_key: str = Depends(require_api_key)):
-    db: Session = SessionLocal()
-    try:
-        user = get_or_create_user(db, api_key)
-        return {
-            "api_key": user.api_key,
-            "credits": user.credits
-        }
-    finally:
-        db.close()
+def me(user: User = Depends(get_current_user)):
+    return {
+        "api_key": user.api_key,
+        "credits": user.credits,
+        "jobs_today": user.jobs_today,
+        "cost_today": user.cost_today,
+        "daily_job_limit": user.daily_job_limit,
+        "daily_cost_limit": user.daily_cost_limit
+    }
 
 
-# --------------------
-# Cost Estimate (SAFE)
-# --------------------
+# ------------------------
+# Estimate Job
+# ------------------------
+
 @app.post("/estimate-job")
-def estimate_job(
-    payload: dict = {},
-    api_key: str = Depends(require_api_key),
-):
-    """
-    Estimate job cost WITHOUT executing it.
-    No credits charged. No job created.
-    """
-    estimate = estimate_cost(payload)
-    user = get_or_create_user(db, api_key)
-
-check_and_update_daily_quota(
-    db=db,
-    user=user,
-    estimated_cost=estimate["estimated_cost"],
-)
-
-    if not estimate["allowed"]:
-        return {
-            **estimate,
-            "warning": "Estimated cost exceeds hard limit. Job would be blocked."
-        }
-
-    return estimate
+def estimate_job(payload: JobSubmitRequest):
+    return estimate_cost(payload)
 
 
-# --------------------
-# Submit Job (EXECUTION)
-# --------------------
+# ------------------------
+# Submit Job
+# ------------------------
+
 @app.post("/submit-job")
 def submit_job(
-    background_tasks: BackgroundTasks,
-    payload: dict = {},
-    api_key: str = Depends(require_api_key),
+    payload: JobSubmitRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    db: Session = SessionLocal()
-    try:
-        # 1) Estimate & HARD LIMIT check
-        estimate = estimate_cost(payload)
-        if not estimate["allowed"]:
-            raise HTTPException(
-                status_code=403,
-                detail="Estimated cost exceeds allowed limit"
-            )
+    # 1. Estimate cost
+    estimate = estimate_cost(payload)
 
-        # 2) Charge credits BEFORE execution
-        remaining = charge_credits(db, api_key, JOB_COST_CREDITS)
-
-        # 3) Create job (with cost estimate attached)
-        job = Job(
-            status="pending",
-            provider=estimate["provider"],
-            user_api_key=api_key,
-            payload=json.dumps(payload),
-            result=None,
-            error=None,
-            currency=estimate["currency"],
-            cost_estimate=estimate["estimated_cost"],
-            cost_actual=None,
+    if not estimate["allowed"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Job not allowed"
         )
-        db.add(job)
-        db.commit()
-        db.refresh(job)
 
-        # 4) Run asynchronously
-        background_tasks.add_task(execute_job, job.id)
+    estimated_cost = estimate["estimated_cost"]
 
-        return {
-            "job_id": job.id,
-            "status": job.status,
-            "charged": JOB_COST_CREDITS,
-            "credits_left": remaining,
-            "estimated_cost": estimate["estimated_cost"],
-            "currency": estimate["currency"],
-        }
+    # 2. Daily quota protection (STEP 6)
+    check_and_update_daily_quota(
+        db=db,
+        user=user,
+        estimated_cost=estimated_cost
+    )
 
-    finally:
-        db.close()
+    # 3. Credit check
+    if user.credits < estimated_cost:
+        raise HTTPException(
+            status_code=402,
+            detail="Not enough credits"
+        )
+
+    # 4. Deduct credits
+    user.credits -= estimated_cost
+
+    # 5. Create job
+    job = Job(
+        user_api_key=user.api_key,
+        provider=payload.provider,
+        problem_type=payload.problem_type,
+        status="queued",
+        estimated_cost=estimated_cost
+    )
+
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "estimated_cost": estimated_cost
+    }
 
 
-# --------------------
-# List Jobs (scoped)
-# --------------------
+# ------------------------
+# Jobs
+# ------------------------
+
 @app.get("/jobs")
-def list_jobs(api_key: str = Depends(require_api_key)):
-    db: Session = SessionLocal()
-    try:
-        jobs = (
-            db.query(Job)
-            .filter(Job.user_api_key == api_key)
-            .order_by(Job.created_at.desc())
-            .all()
-        )
-        return [
-            {
-                "id": j.id,
-                "provider": j.provider,
-                "status": j.status,
-                "cost_estimate": j.cost_estimate,
-                "cost_actual": j.cost_actual,
-                "created_at": j.created_at,
-                "updated_at": j.updated_at,
-            }
-            for j in jobs
-        ]
-    finally:
-        db.close()
+def list_jobs(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    jobs = db.query(Job).filter(
+        Job.user_api_key == user.api_key
+    ).all()
+
+    return jobs
 
 
-# --------------------
-# Get Job Detail (scoped)
-# --------------------
 @app.get("/jobs/{job_id}")
-def get_job(job_id: str, api_key: str = Depends(require_api_key)):
-    db: Session = SessionLocal()
-    try:
-        job = (
-            db.query(Job)
-            .filter(Job.id == job_id)
-            .filter(Job.user_api_key == api_key)
-            .first()
-        )
-        if not job:
-            raise HTTPException(status_code=404, detail="Job not found")
+def get_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    job = db.query(Job).filter(
+        Job.id == job_id,
+        Job.user_api_key == user.api_key
+    ).first()
 
-        payload_obj = {}
-        if job.payload:
-            try:
-                payload_obj = json.loads(job.payload)
-            except Exception:
-                payload_obj = {}
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
 
-        result_obj = None
-        if job.result:
-            try:
-                result_obj = json.loads(job.result)
-            except Exception:
-                result_obj = job.result
-
-        return {
-            "id": job.id,
-            "provider": job.provider,
-            "status": job.status,
-            "payload": payload_obj,
-            "result": result_obj,
-            "error": job.error,
-            "currency": job.currency,
-            "cost_estimate": job.cost_estimate,
-            "cost_actual": job.cost_actual,
-            "created_at": job.created_at,
-            "updated_at": job.updated_at,
-        }
-    finally:
-        db.close()
+    return job
