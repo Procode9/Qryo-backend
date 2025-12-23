@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException
 from .models import User
 
+# MVP pricing: every job costs 1 credit
 JOB_COST_CREDITS = 1
 
 def get_or_create_user(db: Session, api_key: str) -> User:
@@ -9,7 +10,7 @@ def get_or_create_user(db: Session, api_key: str) -> User:
     if user:
         return user
 
-    # First-time user: give small free credits (MVP growth hack)
+    # Growth hack: give new users some free credits
     user = User(api_key=api_key, credits=5)
     db.add(user)
     db.commit()
