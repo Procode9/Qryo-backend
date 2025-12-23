@@ -1,19 +1,26 @@
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy.orm import sessionmaker, declarative_base
 from .config import settings
 
+# SQLAlchemy setup
 engine = create_engine(
     settings.database_url,
     connect_args={"check_same_thread": False}
 )
 
-SessionLocal = sessionmaker(bind=engine)
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine
+)
 
-class Base(DeclarativeBase):
-    def get_db():
+Base = declarative_base()
+
+
+# FastAPI dependency
+def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
-    pass
