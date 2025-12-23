@@ -6,7 +6,7 @@ from .db import engine, SessionLocal
 from .models import Base, Job
 from .jobs import execute_job
 
-# Credit/Auth helpers (bu dosyalar repoda olmalı)
+# Credit/Auth helpers
 from .auth import require_api_key
 from .credits import charge_credits, get_or_create_user, JOB_COST_CREDITS
 
@@ -39,7 +39,7 @@ def submit_job(
 ):
     db: Session = SessionLocal()
     try:
-        # 1) Charge credits BEFORE running the job (no free runs)
+        # 1) Credits must be charged BEFORE the job runs (no free runs)
         remaining = charge_credits(db, api_key, JOB_COST_CREDITS)
 
         # 2) Create job as pending
