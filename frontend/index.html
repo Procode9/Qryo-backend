@@ -2,199 +2,218 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Qryo – Quantum Job Platform</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-
+  <title>Qryo – Quantum Jobs API</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body {
       margin: 0;
-      font-family: Inter, system-ui, sans-serif;
-      background: radial-gradient(circle at top, #0f172a, #020617);
-      color: #e5e7eb;
+      font-family: Inter, Arial, sans-serif;
+      background: #0b0f1a;
+      color: #eaeaf0;
     }
-
-    .container {
+    header {
+      padding: 60px 20px;
+      text-align: center;
+      background: radial-gradient(circle at top, #1b2a6b, #0b0f1a);
+    }
+    header h1 {
+      font-size: 40px;
+      margin-bottom: 10px;
+    }
+    header p {
+      font-size: 18px;
+      opacity: 0.85;
+    }
+    section {
       max-width: 900px;
-      margin: auto;
+      margin: 0 auto;
       padding: 40px 20px;
     }
-
-    h1 {
-      font-size: 2.2rem;
-      margin-bottom: 6px;
-    }
-
-    p {
-      color: #94a3b8;
-      margin-bottom: 24px;
-    }
-
     .card {
-      background: rgba(15, 23, 42, 0.85);
-      border: 1px solid #1e293b;
+      background: #12182b;
       border-radius: 12px;
       padding: 20px;
-      margin-bottom: 24px;
-      box-shadow: 0 0 0 1px rgba(255,255,255,0.02);
+      margin-bottom: 20px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.3);
     }
-
-    label {
-      display: block;
-      margin-top: 12px;
-      font-size: 0.9rem;
-      color: #cbd5f5;
+    h2 {
+      margin-top: 0;
     }
-
-    input, select {
+    input, button, textarea {
       width: 100%;
-      margin-top: 6px;
-      padding: 10px;
-      border-radius: 8px;
-      border: 1px solid #334155;
-      background: #020617;
-      color: #e5e7eb;
-    }
-
-    button {
-      margin-top: 16px;
       padding: 12px;
-      width: 100%;
-      background: linear-gradient(135deg, #6366f1, #3b82f6);
+      margin-top: 10px;
+      border-radius: 8px;
       border: none;
-      border-radius: 10px;
+      font-size: 15px;
+    }
+    input, textarea {
+      background: #0b0f1a;
+      color: #fff;
+      border: 1px solid #2a335d;
+    }
+    button {
+      background: #4f7cff;
       color: white;
-      font-weight: 600;
       cursor: pointer;
-    }
-
-    button:hover {
-      opacity: 0.9;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 12px;
-    }
-
-    th, td {
-      padding: 10px;
-      border-bottom: 1px solid #1e293b;
-      text-align: left;
-      font-size: 0.9rem;
-    }
-
-    th {
-      color: #93c5fd;
-    }
-
-    .status {
       font-weight: 600;
     }
-
-    .pending { color: #facc15; }
-    .completed { color: #4ade80; }
+    button:disabled {
+      background: #333;
+      cursor: not-allowed;
+    }
+    footer {
+      text-align: center;
+      padding: 30px;
+      font-size: 14px;
+      opacity: 0.6;
+    }
+    .success {
+      color: #4dffb3;
+      margin-top: 10px;
+    }
+    .error {
+      color: #ff6b6b;
+      margin-top: 10px;
+    }
   </style>
 </head>
-
 <body>
-  <div class="container">
-    <h1>Qryo</h1>
-    <p>Quantum Job Aggregation Platform</p>
 
-    <!-- API KEY -->
-    <div class="card">
-      <h3>🔐 API Access</h3>
-      <label>API Key</label>
-      <input id="apiKey" placeholder="x-api-key" />
-    </div>
+<header>
+  <h1>Qryo</h1>
+  <p>Serverless Quantum Job Submission API</p>
+</header>
 
-    <!-- SUBMIT JOB -->
-    <div class="card">
-      <h3>🚀 Submit Quantum Job</h3>
-
-      <label>Problem Type</label>
-      <select id="problemType">
-        <option value="optimization">Optimization</option>
-        <option value="sampling">Sampling</option>
-      </select>
-
-      <label>Problem Size</label>
-      <input id="size" type="number" value="10" />
-
-      <button onclick="submitJob()">Submit Job</button>
-    </div>
-
-    <!-- JOB LIST -->
-    <div class="card">
-      <h3>📋 Jobs</h3>
-      <button onclick="loadJobs()">Refresh</button>
-
-      <table>
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Status</th>
-            <th>Cost</th>
-          </tr>
-        </thead>
-        <tbody id="jobs"></tbody>
-      </table>
-    </div>
+<section>
+  <div class="card">
+    <h2>What is Qryo?</h2>
+    <p>
+      Qryo is a lightweight API that lets researchers, students and companies
+      submit quantum-inspired or quantum-ready jobs without managing quantum infrastructure.
+    </p>
   </div>
 
-  <script>
-    const API_BASE = "https://qryo-backend.onrender.com";
+  <div class="card">
+    <h2>Who is it for?</h2>
+    <ul>
+      <li>Universities & researchers</li>
+      <li>Optimization & AI teams</li>
+      <li>Early quantum developers</li>
+      <li>Anyone experimenting with future compute</li>
+    </ul>
+  </div>
 
-    function headers() {
-      return {
-        "Content-Type": "application/json",
-        "x-api-key": document.getElementById("apiKey").value
-      };
+  <div class="card">
+    <h2>How it works</h2>
+    <ol>
+      <li>Create an API key</li>
+      <li>Submit a job</li>
+      <li>We queue & process</li>
+      <li>Retrieve results</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>API Key</h2>
+    <input id="apiKeyInput" placeholder="Enter your API key" />
+    <button onclick="saveKey()">Save API Key</button>
+    <div id="keyStatus"></div>
+  </div>
+
+  <div class="card">
+    <h2>Submit Job</h2>
+    <textarea id="jobPayload" rows="4" placeholder='{"problem": "demo"}'></textarea>
+    <button id="submitBtn" onclick="submitJob()" disabled>Submit Job</button>
+    <div id="jobStatus"></div>
+  </div>
+
+  <div class="card">
+    <h2>Jobs</h2>
+    <button id="loadBtn" onclick="loadJobs()" disabled>Load Jobs</button>
+    <pre id="jobsOutput"></pre>
+  </div>
+</section>
+
+<footer>
+  © 2025 Qryo — Quantum Infrastructure Abstraction
+</footer>
+
+<script>
+  const API_BASE = "https://qryo-backend.onrender.com";
+  const apiKeyInput = document.getElementById("apiKeyInput");
+  const submitBtn = document.getElementById("submitBtn");
+  const loadBtn = document.getElementById("loadBtn");
+
+  function saveKey() {
+    const key = apiKeyInput.value.trim();
+    if (!key) {
+      setStatus("keyStatus", "API key required", true);
+      return;
     }
+    localStorage.setItem("qryo_api_key", key);
+    setStatus("keyStatus", "API key saved", false);
+    enableActions();
+  }
 
-    async function submitJob() {
+  function enableActions() {
+    submitBtn.disabled = false;
+    loadBtn.disabled = false;
+  }
+
+  function getKey() {
+    return localStorage.getItem("qryo_api_key");
+  }
+
+  async function submitJob() {
+    const key = getKey();
+    if (!key) return;
+
+    try {
       const res = await fetch(API_BASE + "/submit-job", {
         method: "POST",
-        headers: headers(),
-        body: JSON.stringify({
-          problem_type: document.getElementById("problemType").value,
-          size: Number(document.getElementById("size").value)
-        })
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": key
+        },
+        body: document.getElementById("jobPayload").value || "{}"
       });
-
-      if (!res.ok) {
-        alert("Submit failed");
-        return;
-      }
-
-      loadJobs();
-    }
-
-    async function loadJobs() {
-      const res = await fetch(API_BASE + "/jobs", {
-        headers: headers()
-      });
-
-      if (!res.ok) {
-        alert("Load failed");
-        return;
-      }
-
       const data = await res.json();
-      const tbody = document.getElementById("jobs");
-      tbody.innerHTML = "";
-
-      data.forEach(job => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>${job.job_id}</td>
-          <td class="status ${job.status}">${job.status}</td>
-          <td>${job.estimated_cost ?? "-"}</td>
-        `;
-        tbody.appendChild(tr);
-      });
+      setStatus("jobStatus", JSON.stringify(data, null, 2), false);
+    } catch (e) {
+      setStatus("jobStatus", "Error submitting job", true);
     }
-  </script>
+  }
+
+  async function loadJobs() {
+    const key = getKey();
+    if (!key) return;
+
+    try {
+      const res = await fetch(API_BASE + "/jobs", {
+        headers: { "x-api-key": key }
+      });
+      const data = await res.json();
+      document.getElementById("jobsOutput").textContent =
+        JSON.stringify(data, null, 2);
+    } catch (e) {
+      document.getElementById("jobsOutput").textContent = "Error loading jobs";
+    }
+  }
+
+  function setStatus(id, text, isError) {
+    const el = document.getElementById(id);
+    el.textContent = text;
+    el.className = isError ? "error" : "success";
+  }
+
+  // Auto-load key
+  const savedKey = getKey();
+  if (savedKey) {
+    apiKeyInput.value = savedKey;
+    enableActions();
+  }
+</script>
+
 </body>
 </html>
