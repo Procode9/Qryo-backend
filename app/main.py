@@ -80,6 +80,13 @@ def estimate_job(
     No credits charged. No job created.
     """
     estimate = estimate_cost(payload)
+    user = get_or_create_user(db, api_key)
+
+check_and_update_daily_quota(
+    db=db,
+    user=user,
+    estimated_cost=estimate["estimated_cost"],
+)
 
     if not estimate["allowed"]:
         return {
