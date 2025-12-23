@@ -1,137 +1,50 @@
-from fastapi import FastAPI, Depends, Header, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
-from uuid import uuid4
 
 from .db import get_db
 from .models import User, Job
-from .quota import check_and_update_daily_quota
-from .cost import estimate_cost
 
-app = FastAPI(
-    title="QRYO API",
-    version="0.6.0"
-)
+app = FastAPI(title="Qryo Backend", version="0.1.0")
 
 
 # ------------------------
-# Inline Schema (schemas.py KALDIRILDI)
+# HEALTH CHECK
 # ------------------------
-
-class JobSubmitRequest(BaseModel):
-    provider: str
-    problem_type: str
-
-
-# ------------------------
-# Auth helper
-# ------------------------
-
-def get_current_user(
-    db: Session = Depends(get_db),
-    x_api_key: str = Header(..., alias="X-API-Key"),
-) -> User:
-    user = db.query(User).filter(User.api_key == x_api_key).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return user
-
-
-# ------------------------
-# Health
-# ------------------------
-
-@app.get("/health")
+@app.get("/")
 def health():
     return {"status": "ok"}
 
 
 # ------------------------
-# Register
+# DUMMY AUTH (API KEY YERİNE GEÇİCİ)
 # ------------------------
-
-@app.post("/register")
-def register(db: Session = Depends(get_db)):
-    api_key = str(uuid4())
-
-    user = User(
-        api_key=api_key,
-        credits=20
-    )
-
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-
-    return {
-        "api_key": api_key,
-        "credits": user.credits
-    }
+def get_current_user(db: Session = Depends(get_db)) -> User:
+    user = db.query(User).first()
+    if not user:
+        user = User(
+            email="demo@qryo.ai",
+            api_key="demo-key",
+            jobs_today=0
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    return user
 
 
 # ------------------------
-# Me
+# SUBMIT JOB (SADE – STABİL)
 # ------------------------
-
-@app.get("/me")
-def me(user: User = Depends(get_current_user)):
-    return {
-        "api_key": user.api_key,
-        "credits": user.credits,
-        "jobs_today": user.jobs_today,
-        "cost_today": user.cost_today,
-        "daily_job_limit": user.daily_job_limit,
-        "daily_cost_limit": user.daily_cost_limit
-    }
-
-
-# ------------------------
-# Estimate Job
-# ------------------------
-
-@app.post("/estimate-job")
-def estimate_job(payload: JobSubmitRequest):
-    return estimate_cost(payload)
-
-
-# ------------------------
-# Submit Job
-# ------------------------
-
 @app.post("/submit-job")
 def submit_job(
-    payload: JobSubmitRequest,
+    payload: dict,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user)
 ):
-    # 1. Estimate
-    estimate = estimate_cost(payload)
-
-    if not estimate.get("allowed", True):
-        raise HTTPException(status_code=400, detail="Job not allowed")
-
-    estimated_cost = estimate["estimated_cost"]
-
-    # 2. Daily quota (STEP 6)
-    check_and_update_daily_quota(
-        db=db,
-        user=user,
-        estimated_cost=estimated_cost
-    )
-
-    # 3. Credit check
-    if user.credits < estimated_cost:
-        raise HTTPException(status_code=402, detail="Not enough credits")
-
-    user.credits -= estimated_cost
-
-    # 4. Create job
     job = Job(
-        user_api_key=user.api_key,
-        provider=payload.provider,
-        problem_type=payload.problem_type,
+        user_id=user.id,
         status="queued",
-        estimated_cost=estimated_cost
+        estimated_cost=1  # SABİT, GEÇİCİ
     )
 
     db.add(job)
@@ -140,37 +53,5 @@ def submit_job(
 
     return {
         "job_id": job.id,
-        "status": job.status,
-        "estimated_cost": estimated_cost
+        "status": job.status
     }
-
-
-# ------------------------
-# Jobs
-# ------------------------
-
-@app.get("/jobs")
-def list_jobs(
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    return db.query(Job).filter(
-        Job.user_api_key == user.api_key
-    ).all()
-
-
-@app.get("/jobs/{job_id}")
-def get_job(
-    job_id: int,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    job = db.query(Job).filter(
-        Job.id == job_id,
-        Job.user_api_key == user.api_key
-    ).first()
-
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    return job
