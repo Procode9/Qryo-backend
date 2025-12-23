@@ -1,9 +1,6 @@
 from .config import settings
 
 def estimate_cost(payload: dict) -> dict:
-    """
-    Returns a cost estimate WITHOUT running any job.
-    """
     provider = payload.get("provider", settings.default_provider)
     shots = payload.get("shots", 256)
 
@@ -14,14 +11,14 @@ def estimate_cost(payload: dict) -> dict:
 
     shots = max(1, min(shots, settings.max_shots))
 
-    if provider == "dwave":
+    if str(provider).lower() == "dwave":
+        provider = "dwave"
         unit_cost = settings.cost_per_1000_shots_dwave
     else:
         provider = "sim"
         unit_cost = settings.cost_per_1000_shots_sim
 
     estimated_cost = round((shots / 1000) * unit_cost, 4)
-
     allowed = estimated_cost <= settings.max_estimated_cost_per_job
 
     return {
