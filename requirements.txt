@@ -4,3 +4,4 @@ pydantic
 pydantic-settings
 SQLAlchemy
 python-dotenv
+dwave-ocean-sdk
