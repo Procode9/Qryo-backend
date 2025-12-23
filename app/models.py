@@ -12,7 +12,7 @@ class Job(Base):
     # pending|running|completed|failed
     status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
     provider: Mapped[str] = mapped_column(String, default="simulated", nullable=False)
-
+    user_api_key: Mapped[str] = mapped_column(String, nullable=False, index=True)
     payload: Mapped[str | None] = mapped_column(Text)
     result: Mapped[str | None] = mapped_column(Text)
     error: Mapped[str | None] = mapped_column(Text)
