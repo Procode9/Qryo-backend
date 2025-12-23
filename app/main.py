@@ -1,26 +1,35 @@
 from fastapi import FastAPI, Depends, Header, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from uuid import uuid4
 
 from .db import get_db
 from .models import User, Job
 from .quota import check_and_update_daily_quota
-from .schemas import JobSubmitRequest
 from .cost import estimate_cost
 
 app = FastAPI(
     title="QRYO API",
-    version="0.5.0"
+    version="0.6.0"
 )
 
 
 # ------------------------
-# Helpers
+# Inline Schema (schemas.py KALDIRILDI)
+# ------------------------
+
+class JobSubmitRequest(BaseModel):
+    provider: str
+    problem_type: str
+
+
+# ------------------------
+# Auth helper
 # ------------------------
 
 def get_current_user(
-    db: Session,
-    x_api_key: str = Header(..., alias="X-API-Key")
+    db: Session = Depends(get_db),
+    x_api_key: str = Header(..., alias="X-API-Key"),
 ) -> User:
     user = db.query(User).filter(User.api_key == x_api_key).first()
     if not user:
@@ -95,18 +104,15 @@ def submit_job(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    # 1. Estimate cost
+    # 1. Estimate
     estimate = estimate_cost(payload)
 
-    if not estimate["allowed"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Job not allowed"
-        )
+    if not estimate.get("allowed", True):
+        raise HTTPException(status_code=400, detail="Job not allowed")
 
     estimated_cost = estimate["estimated_cost"]
 
-    # 2. Daily quota protection (STEP 6)
+    # 2. Daily quota (STEP 6)
     check_and_update_daily_quota(
         db=db,
         user=user,
@@ -115,15 +121,11 @@ def submit_job(
 
     # 3. Credit check
     if user.credits < estimated_cost:
-        raise HTTPException(
-            status_code=402,
-            detail="Not enough credits"
-        )
+        raise HTTPException(status_code=402, detail="Not enough credits")
 
-    # 4. Deduct credits
     user.credits -= estimated_cost
 
-    # 5. Create job
+    # 4. Create job
     job = Job(
         user_api_key=user.api_key,
         provider=payload.provider,
@@ -152,11 +154,9 @@ def list_jobs(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    jobs = db.query(Job).filter(
+    return db.query(Job).filter(
         Job.user_api_key == user.api_key
     ).all()
-
-    return jobs
 
 
 @app.get("/jobs/{job_id}")
