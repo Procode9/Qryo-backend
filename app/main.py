@@ -23,15 +23,13 @@ def health():
 @app.post("/register")
 def register():
     """
-    Creates a new user and returns a random api_key.
-    Gives initial credits (handled by our user creation).
+    Create a new user and return a random API key + initial credits.
     """
     db: Session = SessionLocal()
     try:
-        # Generate a random API key
         api_key = secrets.token_urlsafe(24)
 
-        # Create user with initial credits (5)
+        # Initial credits: 5 (MVP growth)
         user = User(api_key=api_key, credits=5)
         db.add(user)
         db.commit()
@@ -60,7 +58,7 @@ def submit_job(
 ):
     db: Session = SessionLocal()
     try:
-        # Ensure user exists and charge credits BEFORE job runs
+        # Must exist + charge credits BEFORE running
         remaining = charge_credits(db, api_key, JOB_COST_CREDITS)
 
         job = Job(
