@@ -1,24 +1,45 @@
 import json
+import secrets
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends
 from sqlalchemy.orm import Session
 
 from .db import engine, SessionLocal
-from .models import Base, Job
+from .models import Base, Job, User
 from .jobs import execute_job
 
-# Credit/Auth helpers
 from .auth import require_api_key
 from .credits import charge_credits, get_or_create_user, JOB_COST_CREDITS
 
-# Create tables at startup
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="QRYO API", version="0.2.0")
+app = FastAPI(title="QRYO API", version="0.3.0")
 
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.post("/register")
+def register():
+    """
+    Creates a new user and returns a random api_key.
+    Gives initial credits (handled by our user creation).
+    """
+    db: Session = SessionLocal()
+    try:
+        # Generate a random API key
+        api_key = secrets.token_urlsafe(24)
+
+        # Create user with initial credits (5)
+        user = User(api_key=api_key, credits=5)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        return {"api_key": user.api_key, "credits": user.credits}
+    finally:
+        db.close()
 
 
 @app.get("/me")
@@ -39,13 +60,13 @@ def submit_job(
 ):
     db: Session = SessionLocal()
     try:
-        # 1) Credits must be charged BEFORE the job runs (no free runs)
+        # Ensure user exists and charge credits BEFORE job runs
         remaining = charge_credits(db, api_key, JOB_COST_CREDITS)
 
-        # 2) Create job as pending
         job = Job(
             status="pending",
             provider="simulated",
+            user_api_key=api_key,
             payload=json.dumps(payload),
             result=None,
             error=None,
@@ -54,7 +75,6 @@ def submit_job(
         db.commit()
         db.refresh(job)
 
-        # 3) Run in background
         background_tasks.add_task(execute_job, job.id)
 
         return {
@@ -68,10 +88,15 @@ def submit_job(
 
 
 @app.get("/jobs")
-def list_jobs():
+def list_jobs(api_key: str = Depends(require_api_key)):
     db: Session = SessionLocal()
     try:
-        jobs = db.query(Job).order_by(Job.created_at.desc()).all()
+        jobs = (
+            db.query(Job)
+            .filter(Job.user_api_key == api_key)
+            .order_by(Job.created_at.desc())
+            .all()
+        )
         return [
             {
                 "id": j.id,
@@ -87,10 +112,15 @@ def list_jobs():
 
 
 @app.get("/jobs/{job_id}")
-def get_job(job_id: str):
+def get_job(job_id: str, api_key: str = Depends(require_api_key)):
     db: Session = SessionLocal()
     try:
-        job = db.query(Job).filter(Job.id == job_id).first()
+        job = (
+            db.query(Job)
+            .filter(Job.id == job_id)
+            .filter(Job.user_api_key == api_key)
+            .first()
+        )
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
 
