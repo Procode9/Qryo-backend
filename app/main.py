@@ -14,7 +14,7 @@ from .estimation import estimate_cost
 # Create tables
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="QRYO API", version="0.4.0")
+app = FastAPI(title="QRYO API", version="0.5.0")
 
 
 # --------------------
@@ -67,7 +67,7 @@ def me(api_key: str = Depends(require_api_key)):
 
 
 # --------------------
-# Cost Estimate (NEW)
+# Cost Estimate (SAFE)
 # --------------------
 @app.post("/estimate-job")
 def estimate_job(
@@ -90,7 +90,7 @@ def estimate_job(
 
 
 # --------------------
-# Submit Job (real execution)
+# Submit Job (EXECUTION)
 # --------------------
 @app.post("/submit-job")
 def submit_job(
@@ -100,7 +100,7 @@ def submit_job(
 ):
     db: Session = SessionLocal()
     try:
-        # 1) Cost safety check (same logic as estimate)
+        # 1) Estimate & HARD LIMIT check
         estimate = estimate_cost(payload)
         if not estimate["allowed"]:
             raise HTTPException(
@@ -111,7 +111,7 @@ def submit_job(
         # 2) Charge credits BEFORE execution
         remaining = charge_credits(db, api_key, JOB_COST_CREDITS)
 
-        # 3) Create job
+        # 3) Create job (with cost estimate attached)
         job = Job(
             status="pending",
             provider=estimate["provider"],
@@ -119,6 +119,9 @@ def submit_job(
             payload=json.dumps(payload),
             result=None,
             error=None,
+            currency=estimate["currency"],
+            cost_estimate=estimate["estimated_cost"],
+            cost_actual=None,
         )
         db.add(job)
         db.commit()
@@ -133,6 +136,7 @@ def submit_job(
             "charged": JOB_COST_CREDITS,
             "credits_left": remaining,
             "estimated_cost": estimate["estimated_cost"],
+            "currency": estimate["currency"],
         }
 
     finally:
@@ -157,6 +161,8 @@ def list_jobs(api_key: str = Depends(require_api_key)):
                 "id": j.id,
                 "provider": j.provider,
                 "status": j.status,
+                "cost_estimate": j.cost_estimate,
+                "cost_actual": j.cost_actual,
                 "created_at": j.created_at,
                 "updated_at": j.updated_at,
             }
@@ -203,6 +209,9 @@ def get_job(job_id: str, api_key: str = Depends(require_api_key)):
             "payload": payload_obj,
             "result": result_obj,
             "error": job.error,
+            "currency": job.currency,
+            "cost_estimate": job.cost_estimate,
+            "cost_actual": job.cost_actual,
             "created_at": job.created_at,
             "updated_at": job.updated_at,
         }
