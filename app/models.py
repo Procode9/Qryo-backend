@@ -1,58 +1,67 @@
-import uuid
-from datetime import datetime
-from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, DateTime, Text, Integer, Float
+from datetime import datetime, date
+
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Float,
+    Date,
+    DateTime,
+    ForeignKey,
+)
+from sqlalchemy.orm import relationship
+
 from .db import Base
-from datetime import date
-from sqlalchemy import Date, Integer
-from sqlalchemy.orm import Mapped, mapped_column
+
+
+# ------------------------
+# User
+# ------------------------
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = {"extend_existing": True}
 
-    api_key: Mapped[str] = mapped_column(String, primary_key=True)
+    api_key = Column(String, primary_key=True, index=True)
 
-    credits: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    credits = Column(Integer, default=0, nullable=False)
 
-    # --- DAILY LIMITS ---
-    daily_job_limit: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
-    daily_cost_limit: Mapped[float] = mapped_column(Float, default=10.0, nullable=False)
+    # Daily quota / abuse protection
+    daily_job_limit = Column(Integer, default=20, nullable=False)
+    daily_cost_limit = Column(Float, default=10.0, nullable=False)
 
-    jobs_today: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    cost_today: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    last_reset_date: Mapped[date] = mapped_column(Date, default=date.today, nullable=False)
+    jobs_today = Column(Integer, default=0, nullable=False)
+    cost_today = Column(Float, default=0.0, nullable=False)
+    last_reset_date = Column(Date, default=date.today, nullable=False)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    jobs = relationship("Job", back_populates="user")
+
+
+# ------------------------
+# Job
+# ------------------------
 
 class Job(Base):
     __tablename__ = "jobs"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = Column(Integer, primary_key=True, index=True)
 
-    # pending|running|completed|failed
-    status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
-    provider: Mapped[str] = mapped_column(String, default="simulated", nullable=False)
+    user_api_key = Column(
+        String,
+        ForeignKey("users.api_key"),
+        nullable=False,
+        index=True
+    )
 
-    # who owns this job
-    user_api_key: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    provider = Column(String, nullable=False)
+    problem_type = Column(String, nullable=False)
 
-    # request/response
-    payload: Mapped[str | None] = mapped_column(Text)
-    result: Mapped[str | None] = mapped_column(Text)
-    error: Mapped[str | None] = mapped_column(Text)
+    status = Column(String, default="queued", nullable=False)
 
-    # cost tracking
-    currency: Mapped[str] = mapped_column(String, default="USD", nullable=False)
-    cost_estimate: Mapped[float | None] = mapped_column(Float)
-    cost_actual: Mapped[float | None] = mapped_column(Float)
+    estimated_cost = Column(Float, nullable=False)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-
-class User(Base):
-    __tablename__ = "users"
-
-    api_key: Mapped[str] = mapped_column(String, primary_key=True)
-    credits: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    user = relationship("User", back_populates="jobs")
