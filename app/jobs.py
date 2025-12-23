@@ -7,9 +7,6 @@ from .models import Job
 from .routing import route_job
 
 def execute_job(job_id: str) -> None:
-    """
-    Runs in background. Updates job status and stores result/error.
-    """
     db: Session = SessionLocal()
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
@@ -37,7 +34,6 @@ def execute_job(job_id: str) -> None:
         db.commit()
 
     except Exception as e:
-        # Mark as failed
         job = db.query(Job).filter(Job.id == job_id).first()
         if job:
             job.status = "failed"
