@@ -1,10 +1,10 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
-from .config import settings
 
-# SQLAlchemy setup
+DATABASE_URL = "sqlite:///./qryo.db"
+
 engine = create_engine(
-    settings.database_url,
+    DATABASE_URL,
     connect_args={"check_same_thread": False}
 )
 
@@ -17,7 +17,6 @@ SessionLocal = sessionmaker(
 Base = declarative_base()
 
 
-# FastAPI dependency
 def get_db():
     db = SessionLocal()
     try:
