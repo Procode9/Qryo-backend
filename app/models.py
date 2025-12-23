@@ -6,4 +6,4 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id = Column(Integer, primary_key=True, index=True)
-    status = Column(String, default="queued")
+    status = Column(String, default="queued", nullable=False)
