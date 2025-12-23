@@ -15,5 +15,10 @@ class Settings(BaseSettings):
 
     # D-Wave (optional)
     dwave_api_token: str | None = None
+    # Cost estimation (USD-like units, abstract)
+    cost_per_1000_shots_sim: float = 0.10   # sim için sembolik
+    cost_per_1000_shots_dwave: float = 1.50 # gerçekçi placeholder
+
+     max_estimated_cost_per_job: float = 5.0 # HARD LIMIT
 
 settings = Settings()
