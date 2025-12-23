@@ -10,6 +10,7 @@ from .jobs import execute_job
 from .auth import require_api_key
 from .credits import charge_credits, get_or_create_user, JOB_COST_CREDITS
 from .estimation import estimate_cost
+from .quota import check_and_update_daily_quota
 
 # Create tables
 Base.metadata.create_all(bind=engine)
