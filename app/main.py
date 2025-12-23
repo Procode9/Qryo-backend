@@ -1,13 +1,16 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 
+from .db import Base, engine, get_db
+from .models import Job
 from .schemas import JobCreate, JobResponse
+
+# DB tablolarını oluştur
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Qryo Backend", version="0.1.0")
 
-# ------------------------
-# CORS (şimdilik açık)
-# ------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,31 +19,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ------------------------
-# ROOT (health check)
-# ------------------------
+
 @app.get("/")
 def root():
     return {"status": "ok", "service": "qryo-backend"}
 
-# ------------------------
-# SUBMIT JOB
-# ------------------------
+
 @app.post("/submit-job", response_model=JobResponse)
-def submit_job(payload: JobCreate):
-    """
-    Şu an:
-    - DB yok
-    - Cost yok
-    - Quantum yok
-
-    Sadece sistemin düzgün çalıştığını kanıtlayan iskelet.
-    """
-
-    fake_job_id = 1
+def submit_job(payload: JobCreate, db: Session = Depends(get_db)):
+    job = Job(status="queued")
+    db.add(job)
+    db.commit()
+    db.refresh(job)
 
     return JobResponse(
-        job_id=fake_job_id,
-        status="queued",
+        job_id=job.id,
+        status=job.status,
         estimated_cost=None,
     )
