@@ -9,47 +9,89 @@ from .jobs import execute_job
 
 from .auth import require_api_key
 from .credits import charge_credits, get_or_create_user, JOB_COST_CREDITS
+from .estimation import estimate_cost
 
+# Create tables
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="QRYO API", version="0.3.0")
+app = FastAPI(title="QRYO API", version="0.4.0")
 
 
+# --------------------
+# Health
+# --------------------
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
+# --------------------
+# Register
+# --------------------
 @app.post("/register")
 def register():
     """
-    Create a new user and return a random API key + initial credits.
+    Create a new user and return a random API key with initial credits.
     """
     db: Session = SessionLocal()
     try:
         api_key = secrets.token_urlsafe(24)
 
-        # Initial credits: 5 (MVP growth)
         user = User(api_key=api_key, credits=5)
         db.add(user)
         db.commit()
         db.refresh(user)
 
-        return {"api_key": user.api_key, "credits": user.credits}
+        return {
+            "api_key": user.api_key,
+            "credits": user.credits
+        }
     finally:
         db.close()
 
 
+# --------------------
+# Me
+# --------------------
 @app.get("/me")
 def me(api_key: str = Depends(require_api_key)):
     db: Session = SessionLocal()
     try:
-        u = get_or_create_user(db, api_key)
-        return {"api_key": u.api_key, "credits": u.credits}
+        user = get_or_create_user(db, api_key)
+        return {
+            "api_key": user.api_key,
+            "credits": user.credits
+        }
     finally:
         db.close()
 
 
+# --------------------
+# Cost Estimate (NEW)
+# --------------------
+@app.post("/estimate-job")
+def estimate_job(
+    payload: dict = {},
+    api_key: str = Depends(require_api_key),
+):
+    """
+    Estimate job cost WITHOUT executing it.
+    No credits charged. No job created.
+    """
+    estimate = estimate_cost(payload)
+
+    if not estimate["allowed"]:
+        return {
+            **estimate,
+            "warning": "Estimated cost exceeds hard limit. Job would be blocked."
+        }
+
+    return estimate
+
+
+# --------------------
+# Submit Job (real execution)
+# --------------------
 @app.post("/submit-job")
 def submit_job(
     background_tasks: BackgroundTasks,
@@ -58,12 +100,21 @@ def submit_job(
 ):
     db: Session = SessionLocal()
     try:
-        # Must exist + charge credits BEFORE running
+        # 1) Cost safety check (same logic as estimate)
+        estimate = estimate_cost(payload)
+        if not estimate["allowed"]:
+            raise HTTPException(
+                status_code=403,
+                detail="Estimated cost exceeds allowed limit"
+            )
+
+        # 2) Charge credits BEFORE execution
         remaining = charge_credits(db, api_key, JOB_COST_CREDITS)
 
+        # 3) Create job
         job = Job(
             status="pending",
-            provider="simulated",
+            provider=estimate["provider"],
             user_api_key=api_key,
             payload=json.dumps(payload),
             result=None,
@@ -73,6 +124,7 @@ def submit_job(
         db.commit()
         db.refresh(job)
 
+        # 4) Run asynchronously
         background_tasks.add_task(execute_job, job.id)
 
         return {
@@ -80,11 +132,16 @@ def submit_job(
             "status": job.status,
             "charged": JOB_COST_CREDITS,
             "credits_left": remaining,
+            "estimated_cost": estimate["estimated_cost"],
         }
+
     finally:
         db.close()
 
 
+# --------------------
+# List Jobs (scoped)
+# --------------------
 @app.get("/jobs")
 def list_jobs(api_key: str = Depends(require_api_key)):
     db: Session = SessionLocal()
@@ -109,6 +166,9 @@ def list_jobs(api_key: str = Depends(require_api_key)):
         db.close()
 
 
+# --------------------
+# Get Job Detail (scoped)
+# --------------------
 @app.get("/jobs/{job_id}")
 def get_job(job_id: str, api_key: str = Depends(require_api_key)):
     db: Session = SessionLocal()
