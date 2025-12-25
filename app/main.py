@@ -1,17 +1,8 @@
-from fastapi import FastAPI, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-from typing import List
-import time
+from pydantic import BaseModel, EmailStr
 
-from .db import Base, engine, get_db
-from .models import Job
-from .schemas import JobCreate, JobResponse
-from .cost import estimate_cost
-
-Base.metadata.create_all(bind=engine)
-
-app = FastAPI(title="Qryo Backend", version="0.4.0")
+app = FastAPI(title="Qryo API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,70 +12,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---- In-memory waitlist (Phase 0) ----
+WAITLIST = []
+
+class WaitlistRequest(BaseModel):
+    email: EmailStr
 
 @app.get("/")
 def root():
-    return {"status": "ok", "worker": "simulated"}
+    return {"status": "ok", "service": "qryo-backend"}
 
+@app.post("/v1/waitlist")
+def join_waitlist(data: WaitlistRequest):
+    if data.email in WAITLIST:
+        raise HTTPException(status_code=400, detail="Email already registered")
 
-# ------------------------
-# BACKGROUND WORKER
-# ------------------------
-def run_job(job_id: int):
-    from .db import SessionLocal
+    WAITLIST.append(data.email)
 
-    db = SessionLocal()
-    job = db.query(Job).get(job_id)
+    # Log for now (Render logs = audit trail)
+    print(f"[WAITLIST] New signup: {data.email}")
 
-    if not job:
-        db.close()
-        return
-
-    job.status = "running"
-    db.commit()
-
-    time.sleep(3)  # simulate work
-
-    job.status = "done"
-    db.commit()
-    db.close()
-
-
-# ------------------------
-# CREATE JOB
-# ------------------------
-@app.post("/submit-job", response_model=JobResponse)
-def submit_job(
-    _: JobCreate,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-):
-    job = Job(status="queued")
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-
-    background_tasks.add_task(run_job, job.id)
-
-    return JobResponse(
-        job_id=job.id,
-        status=job.status,
-        estimated_cost=estimate_cost(),
-    )
-
-
-# ------------------------
-# LIST JOBS
-# ------------------------
-@app.get("/jobs", response_model=List[JobResponse])
-def list_jobs(db: Session = Depends(get_db)):
-    jobs = db.query(Job).order_by(Job.id.desc()).all()
-
-    return [
-        JobResponse(
-            job_id=j.id,
-            status=j.status,
-            estimated_cost=estimate_cost(),
-        )
-        for j in jobs
-    ]
+    return {
+        "success": True,
+        "message": "You are on the waitlist",
+        "count": len(WAITLIST)
+    }
