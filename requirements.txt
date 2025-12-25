@@ -5,3 +5,4 @@ pydantic-settings
 SQLAlchemy
 python-dotenv
 dwave-ocean-sdk
+email-validator
