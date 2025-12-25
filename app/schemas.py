@@ -1,15 +1,12 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Dict, Any
+from datetime import datetime
 
-
-class JobCreate(BaseModel):
-    pass
-
+class JobSubmitRequest(BaseModel):
+    task: str
+    params: Dict[str, Any] = {}
 
 class JobResponse(BaseModel):
-    job_id: int
+    job_id: str
     status: str
-    estimated_cost: Optional[float] = None
-
-    class Config:
-        from_attributes = True
+    created_at: datetime
