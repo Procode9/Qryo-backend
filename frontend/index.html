@@ -18,12 +18,29 @@
     </div>
 
     <div class="card">
-      <h2>What is Qryo?</h2>
-      <p>
-        Qryo is a lightweight API that lets developers submit
-        quantum-inspired or quantum-ready jobs without managing
-        any quantum infrastructure.
-      </p>
+      <h2>Submit a Job</h2>
+
+      <label>API Key</label>
+      <input id="apiKey" placeholder="your-api-key" />
+
+      <label>Job Type</label>
+      <select id="jobType">
+        <option value="optimization">Optimization</option>
+        <option value="simulation">Simulation</option>
+        <option value="sampling">Sampling</option>
+      </select>
+
+      <label>Payload (JSON)</label>
+      <textarea id="payload" rows="6">
+{
+  "problem": "example",
+  "size": 4
+}
+      </textarea>
+
+      <button onclick="submitJob()">Submit Job</button>
+
+      <pre id="result"></pre>
     </div>
 
     <div class="card">
