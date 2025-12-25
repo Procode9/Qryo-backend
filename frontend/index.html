@@ -2,218 +2,44 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Qryo – Quantum Jobs API</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    body {
-      margin: 0;
-      font-family: Inter, Arial, sans-serif;
-      background: #0b0f1a;
-      color: #eaeaf0;
-    }
-    header {
-      padding: 60px 20px;
-      text-align: center;
-      background: radial-gradient(circle at top, #1b2a6b, #0b0f1a);
-    }
-    header h1 {
-      font-size: 40px;
-      margin-bottom: 10px;
-    }
-    header p {
-      font-size: 18px;
-      opacity: 0.85;
-    }
-    section {
-      max-width: 900px;
-      margin: 0 auto;
-      padding: 40px 20px;
-    }
-    .card {
-      background: #12182b;
-      border-radius: 12px;
-      padding: 20px;
-      margin-bottom: 20px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-    }
-    h2 {
-      margin-top: 0;
-    }
-    input, button, textarea {
-      width: 100%;
-      padding: 12px;
-      margin-top: 10px;
-      border-radius: 8px;
-      border: none;
-      font-size: 15px;
-    }
-    input, textarea {
-      background: #0b0f1a;
-      color: #fff;
-      border: 1px solid #2a335d;
-    }
-    button {
-      background: #4f7cff;
-      color: white;
-      cursor: pointer;
-      font-weight: 600;
-    }
-    button:disabled {
-      background: #333;
-      cursor: not-allowed;
-    }
-    footer {
-      text-align: center;
-      padding: 30px;
-      font-size: 14px;
-      opacity: 0.6;
-    }
-    .success {
-      color: #4dffb3;
-      margin-top: 10px;
-    }
-    .error {
-      color: #ff6b6b;
-      margin-top: 10px;
-    }
-  </style>
+  <title>Qryo – Serverless Quantum Job API</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
-<header>
-  <h1>Qryo</h1>
-  <p>Serverless Quantum Job Submission API</p>
-</header>
+  <div class="container">
+    <h1>Qryo</h1>
+    <p class="subtitle">Serverless Quantum Job Submission API</p>
 
-<section>
-  <div class="card">
-    <h2>What is Qryo?</h2>
-    <p>
-      Qryo is a lightweight API that lets researchers, students and companies
-      submit quantum-inspired or quantum-ready jobs without managing quantum infrastructure.
-    </p>
+    <div class="card">
+      <h2>Status</h2>
+      <p id="api-status">Checking API...</p>
+    </div>
+
+    <div class="card">
+      <h2>What is Qryo?</h2>
+      <p>
+        Qryo is a lightweight API that lets developers submit
+        quantum-inspired or quantum-ready jobs without managing
+        any quantum infrastructure.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Endpoints</h2>
+      <ul>
+        <li><code>GET /</code> – Health check</li>
+        <li><code>POST /submit-job</code> – Submit a job</li>
+        <li><code>GET /jobs</code> – List jobs</li>
+      </ul>
+    </div>
+
+    <footer>
+      <span>© 2025 Qryo</span>
+    </footer>
   </div>
 
-  <div class="card">
-    <h2>Who is it for?</h2>
-    <ul>
-      <li>Universities & researchers</li>
-      <li>Optimization & AI teams</li>
-      <li>Early quantum developers</li>
-      <li>Anyone experimenting with future compute</li>
-    </ul>
-  </div>
-
-  <div class="card">
-    <h2>How it works</h2>
-    <ol>
-      <li>Create an API key</li>
-      <li>Submit a job</li>
-      <li>We queue & process</li>
-      <li>Retrieve results</li>
-    </ol>
-  </div>
-
-  <div class="card">
-    <h2>API Key</h2>
-    <input id="apiKeyInput" placeholder="Enter your API key" />
-    <button onclick="saveKey()">Save API Key</button>
-    <div id="keyStatus"></div>
-  </div>
-
-  <div class="card">
-    <h2>Submit Job</h2>
-    <textarea id="jobPayload" rows="4" placeholder='{"problem": "demo"}'></textarea>
-    <button id="submitBtn" onclick="submitJob()" disabled>Submit Job</button>
-    <div id="jobStatus"></div>
-  </div>
-
-  <div class="card">
-    <h2>Jobs</h2>
-    <button id="loadBtn" onclick="loadJobs()" disabled>Load Jobs</button>
-    <pre id="jobsOutput"></pre>
-  </div>
-</section>
-
-<footer>
-  © 2025 Qryo — Quantum Infrastructure Abstraction
-</footer>
-
-<script>
-  const API_BASE = "https://qryo-backend.onrender.com";
-  const apiKeyInput = document.getElementById("apiKeyInput");
-  const submitBtn = document.getElementById("submitBtn");
-  const loadBtn = document.getElementById("loadBtn");
-
-  function saveKey() {
-    const key = apiKeyInput.value.trim();
-    if (!key) {
-      setStatus("keyStatus", "API key required", true);
-      return;
-    }
-    localStorage.setItem("qryo_api_key", key);
-    setStatus("keyStatus", "API key saved", false);
-    enableActions();
-  }
-
-  function enableActions() {
-    submitBtn.disabled = false;
-    loadBtn.disabled = false;
-  }
-
-  function getKey() {
-    return localStorage.getItem("qryo_api_key");
-  }
-
-  async function submitJob() {
-    const key = getKey();
-    if (!key) return;
-
-    try {
-      const res = await fetch(API_BASE + "/submit-job", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": key
-        },
-        body: document.getElementById("jobPayload").value || "{}"
-      });
-      const data = await res.json();
-      setStatus("jobStatus", JSON.stringify(data, null, 2), false);
-    } catch (e) {
-      setStatus("jobStatus", "Error submitting job", true);
-    }
-  }
-
-  async function loadJobs() {
-    const key = getKey();
-    if (!key) return;
-
-    try {
-      const res = await fetch(API_BASE + "/jobs", {
-        headers: { "x-api-key": key }
-      });
-      const data = await res.json();
-      document.getElementById("jobsOutput").textContent =
-        JSON.stringify(data, null, 2);
-    } catch (e) {
-      document.getElementById("jobsOutput").textContent = "Error loading jobs";
-    }
-  }
-
-  function setStatus(id, text, isError) {
-    const el = document.getElementById(id);
-    el.textContent = text;
-    el.className = isError ? "error" : "success";
-  }
-
-  // Auto-load key
-  const savedKey = getKey();
-  if (savedKey) {
-    apiKeyInput.value = savedKey;
-    enableActions();
-  }
-</script>
-
+  <script src="script.js"></script>
 </body>
 </html>
