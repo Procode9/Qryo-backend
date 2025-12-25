@@ -1,1 +1,65 @@
-fetch("https://qryo-backend.onrender.com/...")
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  background: radial-gradient(circle at top, #0f172a, #020617);
+  color: #e5e7eb;
+}
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 60px 20px;
+}
+
+h1 {
+  font-size: 48px;
+  margin-bottom: 8px;
+}
+
+.subtitle {
+  font-size: 18px;
+  color: #94a3b8;
+  margin-bottom: 40px;
+}
+
+.card {
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 20px;
+}
+
+.card h2 {
+  margin-top: 0;
+}
+
+#api-status {
+  font-weight: 600;
+}
+
+#api-status.ok {
+  color: #22c55e;
+}
+
+#api-status.fail {
+  color: #ef4444;
+}
+
+code {
+  background: #020617;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+footer {
+  margin-top: 40px;
+  text-align: center;
+  color: #64748b;
+  font-size: 14px;
+}
