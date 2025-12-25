@@ -44,16 +44,13 @@
     </div>
 
     <div class="card">
-      <h2>Endpoints</h2>
-      <ul>
-        <li><code>GET /</code> – Health check</li>
-        <li><code>POST /submit-job</code> – Submit a job</li>
-        <li><code>GET /jobs</code> – List jobs</li>
-      </ul>
+      <h2>Jobs</h2>
+      <button class="secondary" onclick="loadJobs()">Refresh Jobs</button>
+      <div id="jobs"></div>
     </div>
 
     <footer>
-      <span>© 2025 Qryo</span>
+      © 2025 Qryo
     </footer>
   </div>
 
