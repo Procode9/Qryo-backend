@@ -1,56 +1,38 @@
-from fastapi import FastAPI, Depends
-from pydantic import BaseModel, EmailStr
-from app.auth import (
-    USERS,
-    hash_password,
-    verify_password,
-    create_token,
-    get_current_user
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(
+    title="QRYO Backend",
+    description="Vendor-agnostic quantum job aggregator",
+    version="0.1.0",
 )
 
-app = FastAPI(title="Quantum Aggregator API")
-
-class RegisterRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
+# CORS (landing + future dashboard için güvenli)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
-def root():
-    return {"status": "ok"}
-
-
-@app.post("/auth/register", status_code=201)
-def register(data: RegisterRequest):
-    if data.email in USERS:
-        return {"error": "user_exists"}
-
-    USERS[data.email] = {
-        "password": hash_password(data.password),
-        "created_at": "now"
-    }
-    return {"status": "created"}
-
-
-@app.post("/auth/login")
-def login(data: LoginRequest):
-    user = USERS.get(data.email)
-    if not user or not verify_password(data.password, user["password"]):
-        return {"error": "invalid_credentials"}
-
-    token = create_token(data.email)
-    return {"token": token}
-
-
-@app.get("/dashboard")
-def dashboard(user_email: str = Depends(get_current_user)):
+async def root():
     return {
-        "user": user_email,
-        "jobs": [],
-        "providers": ["simulator"],
-        "status": "ready"
+        "status": "ok",
+        "service": "qryo-backend"
     }
+
+# ---- Analytics / Feedback Loop (Phase-1, DB yok) ----
+@app.post("/track")
+async def track_event(payload: dict, request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+
+    print({
+        "event": payload.get("event"),
+        "path": payload.get("path"),
+        "referrer": payload.get("referrer"),
+        "ip": client_ip,
+    })
+
+    return {"status": "ok"}
