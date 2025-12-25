@@ -36,7 +36,6 @@ label {
   display: block;
   margin-top: 12px;
   font-size: 14px;
-  color: #cbd5f5;
 }
 
 input, select, textarea {
@@ -61,8 +60,10 @@ button {
   cursor: pointer;
 }
 
-button:hover {
-  opacity: 0.9;
+button.secondary {
+  background: #020617;
+  border: 1px solid #334155;
+  margin-bottom: 12px;
 }
 
 pre {
@@ -70,9 +71,25 @@ pre {
   background: #020617;
   padding: 12px;
   border-radius: 8px;
-  overflow-x: auto;
   font-size: 13px;
 }
+
+.job {
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 10px;
+  font-size: 14px;
+}
+
+.status {
+  font-weight: 600;
+}
+
+.status.queued { color: #eab308; }
+.status.running { color: #38bdf8; }
+.status.done { color: #22c55e; }
+.status.failed { color: #ef4444; }
 
 #api-status.ok { color: #22c55e; }
 #api-status.fail { color: #ef4444; }
