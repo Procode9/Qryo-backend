@@ -1,39 +1,51 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Depends, HTTPException
 from pydantic import BaseModel, EmailStr
+from sqlalchemy.orm import Session
+
+from .database import Base, engine, SessionLocal
+from .models import Waitlist
+
+# DB init
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Qryo API")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Dependency
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-# ---- In-memory waitlist (Phase 0) ----
-WAITLIST = []
-
+# Schema
 class WaitlistRequest(BaseModel):
     email: EmailStr
 
+class WaitlistResponse(BaseModel):
+    message: str
+
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "qryo-backend"}
+    return {"status": "ok"}
 
-@app.post("/v1/waitlist")
-def join_waitlist(data: WaitlistRequest):
-    if data.email in WAITLIST:
-        raise HTTPException(status_code=400, detail="Email already registered")
+@app.post("/waitlist", response_model=WaitlistResponse)
+def join_waitlist(
+    payload: WaitlistRequest,
+    db: Session = Depends(get_db)
+):
+    existing = db.query(Waitlist).filter(
+        Waitlist.email == payload.email
+    ).first()
 
-    WAITLIST.append(data.email)
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already registered"
+        )
 
-    # Log for now (Render logs = audit trail)
-    print(f"[WAITLIST] New signup: {data.email}")
+    entry = Waitlist(email=payload.email)
+    db.add(entry)
+    db.commit()
 
-    return {
-        "success": True,
-        "message": "You are on the waitlist",
-        "count": len(WAITLIST)
-    }
+    return {"message": "Added to waitlist"}
