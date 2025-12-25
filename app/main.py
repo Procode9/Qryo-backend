@@ -1,110 +1,125 @@
-from fastapi import FastAPI, Depends, HTTPException, Header
-from pydantic import BaseModel, EmailStr
-from sqlalchemy.orm import Session
-from typing import List
-import csv
-import io
 import os
-from fastapi.responses import StreamingResponse
+from datetime import datetime, timezone
+from typing import Optional
 
-from .database import Base, engine, SessionLocal
-from .models import Waitlist
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import Column, DateTime, Integer, String, create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
 
-# DB init
-Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Qryo API")
+# -------------------------
+# Config
+# -------------------------
+APP_NAME = os.getenv("APP_NAME", "Qryo Backend")
+ENV = os.getenv("ENV", "production")
 
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
-# Dependency
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# Render Postgres vs local sqlite:
+# - If DATABASE_URL is empty -> sqlite file
+# - If postgres URL exists and starts with "postgres://" -> SQLAlchemy expects "postgresql://"
+if DATABASE_URL:
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+else:
+    DATABASE_URL = "sqlite:///./app.db"
 
-def admin_auth(x_admin_token: str = Header(...)):
-    if x_admin_token != ADMIN_TOKEN:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+CONNECT_ARGS = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 
-# Schemas
+engine = create_engine(DATABASE_URL, connect_args=CONNECT_ARGS, pool_pre_ping=True)
+SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+Base = declarative_base()
+
+
+# -------------------------
+# DB Model
+# -------------------------
+class WaitlistEntry(Base):
+    __tablename__ = "waitlist"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(320), unique=True, index=True, nullable=False)
+    name = Column(String(120), nullable=True)
+    source = Column(String(120), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+
+
+def init_db() -> None:
+    Base.metadata.create_all(bind=engine)
+
+
+# -------------------------
+# API Schemas
+# -------------------------
 class WaitlistRequest(BaseModel):
     email: EmailStr
+    name: Optional[str] = Field(default=None, max_length=120)
+    source: Optional[str] = Field(default=None, max_length=120)
+
 
 class WaitlistResponse(BaseModel):
+    ok: bool
     message: str
+    id: Optional[int] = None
 
-class WaitlistItem(BaseModel):
-    id: int
-    email: EmailStr
 
-    class Config:
-        from_attributes = True
+# -------------------------
+# App
+# -------------------------
+app = FastAPI(title=APP_NAME)
+
+# CORS: landing domainini sonra whitelist yaparız; Phase 1 hızlı stabil için açık.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    init_db()
+
 
 @app.get("/")
 def root():
-    return {"status": "ok"}
+    return {"ok": True, "name": APP_NAME, "env": ENV}
 
-# ---- PUBLIC ----
+
+@app.get("/health")
+def health():
+    return {"ok": True}
+
 
 @app.post("/waitlist", response_model=WaitlistResponse)
-def join_waitlist(
-    payload: WaitlistRequest,
-    db: Session = Depends(get_db)
-):
-    existing = db.query(Waitlist).filter(
-        Waitlist.email == payload.email
-    ).first()
+def waitlist(payload: WaitlistRequest):
+    email = payload.email.strip().lower()
 
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail="Email already registered"
+    db = SessionLocal()
+    try:
+        existing = db.query(WaitlistEntry).filter(WaitlistEntry.email == email).first()
+        if existing:
+            return WaitlistResponse(ok=True, message="Already on waitlist", id=existing.id)
+
+        entry = WaitlistEntry(
+            email=email,
+            name=(payload.name.strip() if payload.name else None),
+            source=(payload.source.strip() if payload.source else None),
+            created_at=datetime.now(timezone.utc),
         )
+        db.add(entry)
+        db.commit()
+        db.refresh(entry)
 
-    entry = Waitlist(email=payload.email)
-    db.add(entry)
-    db.commit()
+        return WaitlistResponse(ok=True, message="Added to waitlist", id=entry.id)
 
-    return {"message": "Added to waitlist"}
-
-# ---- ADMIN ----
-
-@app.get("/admin/count")
-def admin_count(
-    db: Session = Depends(get_db),
-    _: None = Depends(admin_auth)
-):
-    count = db.query(Waitlist).count()
-    return {"count": count}
-
-@app.get("/admin/list", response_model=List[WaitlistItem])
-def admin_list(
-    db: Session = Depends(get_db),
-    _: None = Depends(admin_auth)
-):
-    return db.query(Waitlist).order_by(Waitlist.id.desc()).all()
-
-@app.get("/admin/export")
-def admin_export(
-    db: Session = Depends(get_db),
-    _: None = Depends(admin_auth)
-):
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["id", "email", "created_at"])
-
-    for row in db.query(Waitlist).all():
-        writer.writerow([row.id, row.email, row.created_at])
-
-    output.seek(0)
-
-    return StreamingResponse(
-        output,
-        media_type="text/csv",
-        headers={
-            "Content-Disposition": "attachment; filename=waitlist.csv"
-        }
-    )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+    finally:
+        db.close()
