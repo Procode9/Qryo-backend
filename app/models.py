@@ -1,9 +1,9 @@
-from sqlalchemy import Column, Integer, String
-from .db import Base
+from sqlalchemy import Column, Integer, String, DateTime, func
+from .database import Base
 
-
-class Job(Base):
-    __tablename__ = "jobs"
+class Waitlist(Base):
+    __tablename__ = "waitlist"
 
     id = Column(Integer, primary_key=True, index=True)
-    status = Column(String, default="queued", nullable=False)
+    email = Column(String, unique=True, index=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
