@@ -83,30 +83,24 @@ def _decode_token(token: str) -> tuple[str, int]:
 
 
 # =========================================================
-# AUTH DEPENDENCY (GLOBAL, SAFE)
-# =========================================================
+# ---------------------------
+# Auth dependency
+# ---------------------------
 def get_current_user(
     db: Session = Depends(get_db),
     authorization: Optional[str] = Header(default=None),
 ) -> User:
+    """
+    Authorization: Bearer <token>
+    Token DB'de UserToken olarak saklanır.
+    revoked = false
+    expires_at > now
+    """
+
     if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing Authorization header",
- def get_current_user(
-    request: Request,
-    db: Session = Depends(get_db),
-    authorization: Optional[str] = Header(default=None),
-):
-    ...
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-
-    # 🔒 RATE LIMIT (user-based)
-    rate_limit_check(request, user.id)
-
-    return user          
         )
 
     parts = authorization.split(" ", 1)
@@ -117,33 +111,37 @@ def get_current_user(
         )
 
     token_value = parts[1].strip()
+    if not token_value:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Empty token",
+        )
 
-    # --- decode token ---
-    user_id, exp = _decode_token(token_value)
-
-    # --- DB lookup ---
-    token = (
+    tok = (
         db.query(UserToken)
         .filter(UserToken.token == token_value)
         .first()
     )
 
-    if not token:
+    if not tok:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token not found",
+            detail="Invalid token",
         )
 
-    # --- LAZY CLEANUP ---
-    if token.revoked or token.expires_at < now_utc():
-        db.delete(token)
-        db.commit()
+    if tok.revoked:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token expired or revoked",
+            detail="Token revoked",
         )
 
-    user = db.query(User).filter(User.id == token.user_id).first()
+    if tok.expires_at and now_utc() >= tok.expires_at:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token expired",
+        )
+
+    user = db.query(User).filter(User.id == tok.user_id).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
