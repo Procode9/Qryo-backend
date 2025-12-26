@@ -15,6 +15,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, relationship
 
+from .constants import JobStatus  # ✅ Phase-1 tek status kaynağı
 
 Base = declarative_base()
 
@@ -38,8 +39,16 @@ class User(Base):
 
     created_at = Column(DateTime(timezone=True), nullable=False, default=now_utc)
 
-    tokens = relationship("UserToken", back_populates="user", cascade="all, delete-orphan")
-    jobs = relationship("Job", back_populates="user", cascade="all, delete-orphan")
+    tokens = relationship(
+        "UserToken",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    jobs = relationship(
+        "Job",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
 
 # -------------------------
@@ -48,7 +57,7 @@ class User(Base):
 class UserToken(Base):
     __tablename__ = "user_tokens"
 
-    # random opaque token (Bearer)
+    # opaque bearer token
     token = Column(String(128), primary_key=True, index=True)
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
@@ -56,13 +65,13 @@ class UserToken(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=now_utc)
     expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
 
-    # ✅ CRITICAL: revoke support
+    # ✅ revoke support (Phase-1 security)
     revoked_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     user = relationship("User", back_populates="tokens")
 
 
-# Helpful indexes (performans + güvenlik)
+# Performans + güvenlik indexleri
 Index("ix_user_tokens_user_active", UserToken.user_id, UserToken.revoked_at)
 Index("ix_user_tokens_expiry", UserToken.expires_at)
 
@@ -82,7 +91,15 @@ class Job(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
 
     provider = Column(String(32), nullable=False)  # sim (phase-1)
-    status = Column(String(32), nullable=False)    # queued | running | succeeded | failed
+
+    # ✅ Phase-1 patch:
+    # Tek kaynak: JobStatus enum
+    status = Column(
+        String(32),
+        nullable=False,
+        default=JobStatus.QUEUED,
+        index=True,
+    )
 
     payload_json = Column(Text, nullable=False)
     result_json = Column(Text, nullable=True)
@@ -95,4 +112,5 @@ class Job(Base):
     user = relationship("User", back_populates="jobs")
 
 
+# Job listeleri için kritik index
 Index("ix_jobs_user_created", Job.user_id, Job.created_at.desc())
