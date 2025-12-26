@@ -37,9 +37,10 @@ class Settings(BaseModel):
 
     # -------------------------------------------------
     # Rate limit (Risk-4)
-    # -------------------------------------------------
+    rate_limit_enabled: bool = False
     rate_limit_per_minute: int = Field(
         default_factory=lambda: int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
+    )
     )
 
     # -------------------------------------------------
