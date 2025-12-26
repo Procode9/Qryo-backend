@@ -9,8 +9,12 @@ class Settings(BaseModel):
     # -------------------------------------------------
     # App
     # -------------------------------------------------
-    app_name: str = Field(default_factory=lambda: os.getenv("APP_NAME", "Start QuAntUm"))
-    env: str = Field(default_factory=lambda: os.getenv("APP_ENV", "development"))
+    app_name: str = Field(
+        default_factory=lambda: os.getenv("APP_NAME", "Start QuAntUm")
+    )
+    env: str = Field(
+        default_factory=lambda: os.getenv("APP_ENV", "development")
+    )
     # development | production
 
     # -------------------------------------------------
@@ -23,7 +27,9 @@ class Settings(BaseModel):
     # -------------------------------------------------
     # CORS
     # -------------------------------------------------
-    cors_origins: str = Field(default_factory=lambda: os.getenv("CORS_ORIGINS", "*"))
+    cors_origins: str = Field(
+        default_factory=lambda: os.getenv("CORS_ORIGINS", "*")
+    )
 
     # -------------------------------------------------
     # Auth / Security
@@ -37,17 +43,22 @@ class Settings(BaseModel):
 
     # -------------------------------------------------
     # Rate limit (Risk-4)
-    rate_limit_enabled: bool = False
+    # -------------------------------------------------
+    rate_limit_enabled: bool = Field(
+        default_factory=lambda: os.getenv("RATE_LIMIT_ENABLED", "false").lower() == "true"
+    )
     rate_limit_per_minute: int = Field(
         default_factory=lambda: int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
-    )
     )
 
     # -------------------------------------------------
     # Metrics / Ops (Risk-5)
     # -------------------------------------------------
-    metrics_token: str = Field(
-        default_factory=lambda: os.getenv("METRICS_TOKEN", "")
+    metrics_enabled: bool = Field(
+        default_factory=lambda: os.getenv("METRICS_ENABLED", "false").lower() == "true"
+    )
+    metrics_admin_token: str = Field(
+        default_factory=lambda: os.getenv("METRICS_ADMIN_TOKEN", "")
     )
     metrics_rate_limit_per_min: int = Field(
         default_factory=lambda: int(os.getenv("METRICS_RATE_LIMIT_PER_MIN", "30"))
@@ -67,15 +78,17 @@ settings = Settings()
 def assert_runtime_config() -> None:
     """
     Production ortamında tehlikeli ayarlarla ayağa kalkmayı engeller.
-    Bu fonksiyon startup'ta çağrılabilir.
+    Startup'ta çağrılmalı.
     """
     if settings.env == "production":
+        # CORS guard
         if settings.cors_origins.strip() in {"*", ""}:
             raise RuntimeError(
                 "PROD CONFIG ERROR: CORS_ORIGINS '*' olamaz. Domainlerini belirt."
             )
 
-        if not settings.metrics_token:
+        # Metrics guard (Risk-5)
+        if settings.metrics_enabled and not settings.metrics_admin_token:
             raise RuntimeError(
-                "PROD CONFIG ERROR: METRICS_TOKEN tanımlı değil."
-            )
+                "PROD CONFIG ERROR: METRICS_ENABLED=true ama METRICS_ADMIN_TOKEN yok."
+    )
