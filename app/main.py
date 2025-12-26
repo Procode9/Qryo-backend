@@ -1,61 +1,204 @@
-from fastapi import FastAPI, Request
+# app/main.py
+from __future__ import annotations
+
+import asyncio
+import datetime as dt
+import json
+
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import time
-from collections import defaultdict, deque
+from sqlalchemy.orm import Session
 
-app = FastAPI(
-    title="QRYO Backend",
-    description="Vendor-agnostic quantum job aggregator",
-    version="0.1.0",
-)
+from .config import settings
+from .db import SessionLocal, engine
+from .deps import get_current_user, get_db
+from .models import Base, Job, User, UserToken, now_utc
+from .schemas import AuthResponse, JobResponse, JobSubmitRequest, LoginRequest, MeResponse, RegisterRequest
+from .security import expires_at, hash_password, new_token, verify_password
 
+app = FastAPI(title=settings.app_name)
+
+
+# CORS
+origins = [o.strip() for o in settings.cors_origins.split(",")] if settings.cors_origins else ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=origins if origins != ["*"] else ["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+@app.on_event("startup")
+def on_startup():
+    Base.metadata.create_all(bind=engine)
+
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True, "ts": dt.datetime.now(dt.timezone.utc).isoformat()}
+
+
 @app.get("/")
-async def root():
-    return {"status": "ok", "service": "qryo-backend"}
+def root():
+    return {"name": settings.app_name, "docs": "/docs"}
 
-# ---- Soft rate limit (IP-based, in-memory) ----
-WINDOW_SECONDS = 60
-MAX_EVENTS = 30
-ip_events = defaultdict(deque)
 
-def is_rate_limited(ip: str) -> bool:
-    now = time.time()
-    q = ip_events[ip]
-    while q and now - q[0] > WINDOW_SECONDS:
-        q.popleft()
-    if len(q) >= MAX_EVENTS:
-        return True
-    q.append(now)
-    return False
+# -------------------------
+# AUTH
+# -------------------------
+@app.post("/auth/register", response_model=AuthResponse)
+def register(payload: RegisterRequest, db: Session = Depends(get_db)):
+    email = payload.email.lower().strip()
+    existing = db.query(User).filter(User.email == email).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Email already registered")
 
-# ---- Analytics / Feedback Loop (Light + Bot-safe) ----
-@app.post("/track")
-async def track_event(payload: dict, request: Request):
-    client_ip = request.client.host if request.client else "unknown"
+    try:
+        pw_hash = hash_password(payload.password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-    # Honeypot kontrolü (doluysa bot)
-    if payload.get("hp"):
-        # Sessizce geç → botu teşvik etme
-        return {"status": "ok"}
+    user = User(email=email, password_hash=pw_hash)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
 
-    # Soft rate limit
-    if is_rate_limited(client_ip):
-        # Yine sessizce geç
-        return {"status": "ok"}
+    tok = new_token()
+    db.add(UserToken(token=tok, user_id=user.id, expires_at=expires_at(settings.token_ttl_days)))
+    db.commit()
 
-    print({
-        "event": payload.get("event"),
-        "path": payload.get("path"),
-        "referrer": payload.get("referrer"),
-        "ip": client_ip,
-    })
+    return AuthResponse(token=tok)
 
-    return {"status": "ok"}
+
+@app.post("/auth/login", response_model=AuthResponse)
+def login(payload: LoginRequest, db: Session = Depends(get_db)):
+    email = payload.email.lower().strip()
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    if not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    tok = new_token()
+    db.add(UserToken(token=tok, user_id=user.id, expires_at=expires_at(settings.token_ttl_days)))
+    db.commit()
+
+    return AuthResponse(token=tok)
+
+
+@app.get("/me", response_model=MeResponse)
+def me(user: User = Depends(get_current_user)):
+    return MeResponse(id=user.id, email=user.email)
+
+
+# -------------------------
+# JOBS (phase-1 core)
+# -------------------------
+def _job_to_response(job: Job) -> JobResponse:
+    try:
+        payload = json.loads(job.payload_json or "{}")
+    except Exception:
+        payload = {}
+    try:
+        result = json.loads(job.result_json or "{}")
+    except Exception:
+        result = {}
+    return JobResponse(
+        id=job.id,
+        provider=job.provider,
+        status=job.status,  # type: ignore
+        payload=payload,
+        result=result,
+        error_message=job.error_message,
+    )
+
+
+async def _simulate_job(job_id: str):
+    db: Session = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            return
+
+        job.status = "running"
+        job.updated_at = now_utc()
+        db.commit()
+
+        await asyncio.sleep(2.0)
+
+        try:
+            payload = json.loads(job.payload_json or "{}")
+        except Exception:
+            payload = {}
+
+        job.status = "succeeded"
+        job.result_json = json.dumps(
+            {
+                "provider": job.provider,
+                "echo": payload,
+                "message": "simulated quantum execution completed",
+            },
+            ensure_ascii=False,
+        )
+        job.updated_at = now_utc()
+        db.commit()
+    except Exception as e:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = "failed"
+            job.error_message = str(e)
+            job.updated_at = now_utc()
+            db.commit()
+    finally:
+        db.close()
+
+
+@app.post("/jobs", response_model=JobResponse)
+def submit_job(
+    req: JobSubmitRequest,
+    bg: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    provider = (req.provider or "sim").strip().lower()
+    if provider not in {"sim"}:
+        raise HTTPException(status_code=400, detail="Unsupported provider in phase-1 (use 'sim')")
+
+    job = Job(
+        user_id=user.id,
+        provider=provider,
+        status="queued",
+        payload_json=json.dumps(req.payload or {}, ensure_ascii=False),
+        result_json="{}",
+        created_at=now_utc(),
+        updated_at=now_utc(),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    bg.add_task(_simulate_job, job.id)
+    return _job_to_response(job)
+
+
+@app.get("/jobs", response_model=list[JobResponse])
+def list_jobs(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    jobs = (
+        db.query(Job)
+        .filter(Job.user_id == user.id)
+        .order_by(Job.created_at.desc())
+        .limit(100)
+        .all()
+    )
+    return [_job_to_response(j) for j in jobs]
+
+
+@app.get("/jobs/{job_id}", response_model=JobResponse)
+def get_job(job_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    job = db.query(Job).filter(Job.id == job_id, Job.user_id == user.id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _job_to_response(job)
