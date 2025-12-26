@@ -4,64 +4,95 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    Index,
+)
+from sqlalchemy.orm import declarative_base, relationship
 
 
-class Base(DeclarativeBase):
-    pass
+Base = declarative_base()
 
 
+# -------------------------
+# Time helpers
+# -------------------------
 def now_utc() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+# -------------------------
+# USER
+# -------------------------
 class User(Base):
     __tablename__ = "users"
-    __table_args__ = (UniqueConstraint("email", name="uq_users_email"),)
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+    id = Column(Integer, primary_key=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
 
-    tokens: Mapped[list["UserToken"]] = relationship(
-        "UserToken", back_populates="user", cascade="all, delete-orphan"
-    )
-    jobs: Mapped[list["Job"]] = relationship("Job", back_populates="user", cascade="all, delete-orphan")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=now_utc)
+
+    tokens = relationship("UserToken", back_populates="user", cascade="all, delete-orphan")
+    jobs = relationship("Job", back_populates="user", cascade="all, delete-orphan")
 
 
+# -------------------------
+# USER TOKEN (AUTH CORE)
+# -------------------------
 class UserToken(Base):
     __tablename__ = "user_tokens"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    token: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    # random opaque token (Bearer)
+    token = Column(String(128), primary_key=True, index=True)
 
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    user: Mapped["User"] = relationship("User", back_populates="tokens")
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
 
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
-    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=now_utc)
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+
+    # ✅ CRITICAL: revoke support
+    revoked_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    user = relationship("User", back_populates="tokens")
 
 
+# Helpful indexes (performans + güvenlik)
+Index("ix_user_tokens_user_active", UserToken.user_id, UserToken.revoked_at)
+Index("ix_user_tokens_expiry", UserToken.expires_at)
+
+
+# -------------------------
+# JOB (PHASE-1 CORE)
+# -------------------------
 class Job(Base):
     __tablename__ = "jobs"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    id = Column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
     )
-    user: Mapped["User"] = relationship("User", back_populates="jobs")
 
-    # phase-1: sadece "sim"
-    provider: Mapped[str] = mapped_column(String(32), default="sim", nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
 
-    # queued | running | succeeded | failed
-    status: Mapped[str] = mapped_column(String(16), default="queued", index=True, nullable=False)
+    provider = Column(String(32), nullable=False)  # sim (phase-1)
+    status = Column(String(32), nullable=False)    # queued | running | succeeded | failed
 
-    payload_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
-    result_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
-    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload_json = Column(Text, nullable=False)
+    result_json = Column(Text, nullable=True)
 
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
-    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+    error_message = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, default=now_utc)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=now_utc)
+
+    user = relationship("User", back_populates="jobs")
+
+
+Index("ix_jobs_user_created", Job.user_id, Job.created_at.desc())
