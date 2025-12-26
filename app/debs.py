@@ -4,36 +4,29 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import json
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Generator, Optional
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
-# DB session
-try:
-    from .db import SessionLocal
-except Exception as e:
-    raise RuntimeError(
-        "SessionLocal bulunamadı. app/db.py içinde SessionLocal tanımlı olmalı."
-    ) from e
 
-# User model
-try:
-    from .models import User
-except Exception as e:
-    raise RuntimeError(
-        "User modeli bulunamadı. app/models.py içinde User tanımlı olmalı."
-    ) from e
+# ---------------------------
+# DB dependency
+# ---------------------------
+def get_db() -> Generator[Session, None, None]:
+    """
+    SQLAlchemy session dependency.
+    Tries to import SessionLocal from app.db; if missing, raises a clear error.
+    """
+    try:
+        from .db import SessionLocal  # type: ignore
+    except Exception as e:  # pragma: no cover
+        raise RuntimeError(
+            "SessionLocal bulunamadı. app/db.py içinde SessionLocal tanımlı olmalı."
+        ) from e
 
-
-security = HTTPBearer(auto_error=False)
-
-
-def get_db():
     db = SessionLocal()
     try:
         yield db
@@ -41,107 +34,107 @@ def get_db():
         db.close()
 
 
-# --- Token decode: Önce projede varsa .auth kullan, yoksa fallback decode ---
-def _decode_token_with_project_auth(token: str) -> Optional[Dict[str, Any]]:
+# ---------------------------
+# Minimal token system (stdlib only)
+# ---------------------------
+# Token format: base64("uid:exp:signaturehex")
+# signature = HMAC_SHA256(SECRET_KEY, f"{uid}:{exp}")
+SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me").encode("utf-8")
+TOKEN_TTL_SECONDS = int(os.getenv("TOKEN_TTL_SECONDS", "86400"))  # 24h default
+
+
+def _sign(payload: str) -> str:
+    return hmac.new(SECRET_KEY, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def create_access_token(user_id: int, ttl_seconds: int = TOKEN_TTL_SECONDS) -> str:
+    exp = int(time.time()) + int(ttl_seconds)
+    payload = f"{user_id}:{exp}"
+    sig = _sign(payload)
+    raw = f"{payload}:{sig}".encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("utf-8")
+
+
+def verify_access_token(token: str) -> int:
     """
-    Projede app/auth.py veya benzeri varsa onu kullanmaya çalışır.
-    Bulamazsa None döner (fallback'a geçer).
+    Returns user_id if valid, else raises HTTP 401.
     """
     try:
-        from .auth import decode_token  # type: ignore
-        payload = decode_token(token)  # dict bekliyoruz
-        if isinstance(payload, dict):
-            return payload
+        raw = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
+        uid_str, exp_str, sig = raw.split(":", 2)
+        payload = f"{uid_str}:{exp_str}"
     except Exception:
-        return None
-    return None
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token format",
+        )
 
-
-def _decode_token_fallback(token: str) -> Dict[str, Any]:
-    """
-    Ek dependency istemeyen minimal token doğrulama.
-    Token formatı:
-      base64url(json_payload).base64url(signature)
-    signature = HMAC_SHA256(SECRET_KEY, payload_part)
-    payload içinde en az:
-      {"sub": "<user_id or email>", "exp": <unix_ts>}
-    """
-    secret = os.getenv("SECRET_KEY", "dev-secret-change-me").encode("utf-8")
-
-    if "." not in token:
-        # Bazı projelerde token direkt email/uid gibi saklanmış olabiliyor
-        return {"sub": token, "exp": int(time.time()) + 3600}
-
-    payload_b64, sig_b64 = token.split(".", 1)
-
-    def b64url_decode(s: str) -> bytes:
-        pad = "=" * (-len(s) % 4)
-        return base64.urlsafe_b64decode(s + pad)
-
-    def b64url_encode(b: bytes) -> str:
-        return base64.urlsafe_b64encode(b).decode("utf-8").rstrip("=")
-
-    expected = hmac.new(secret, payload_b64.encode("utf-8"), hashlib.sha256).digest()
-    expected_b64 = b64url_encode(expected)
-
-    if not hmac.compare_digest(expected_b64, sig_b64):
+    expected = _sign(payload)
+    if not hmac.compare_digest(expected, sig):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token signature",
         )
 
-    payload_json = b64url_decode(payload_b64).decode("utf-8")
-    payload = json.loads(payload_json)
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=401, detail="Invalid token payload")
-
-    exp = int(payload.get("exp", 0))
-    if exp and exp < int(time.time()):
-        raise HTTPException(status_code=401, detail="Token expired")
-
-    return payload
-
-
-def decode_token(token: str) -> Dict[str, Any]:
-    payload = _decode_token_with_project_auth(token)
-    if payload is not None:
-        return payload
-    return _decode_token_fallback(token)
-
-
-def get_current_user(
-    creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    db: Session = Depends(get_db),
-) -> User:
-    if not creds or not creds.credentials:
+    try:
+        uid = int(uid_str)
+        exp = int(exp_str)
+    except ValueError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
+            detail="Invalid token payload",
         )
 
-    token = creds.credentials
-    payload = decode_token(token)
+    if time.time() > exp:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token expired",
+        )
 
-    sub = payload.get("sub")
-    if not sub:
-        raise HTTPException(status_code=401, detail="Invalid token (no sub)")
+    return uid
 
-    # sub email olabilir, id olabilir. İkisini de deneriz.
-    user = None
 
-    # 1) email gibi görünüyorsa email ile ara
-    if isinstance(sub, str) and "@" in sub:
-        user = db.query(User).filter(User.email == sub).first()
+# ---------------------------
+# Auth dependency
+# ---------------------------
+def get_current_user(
+    db: Session = Depends(get_db),
+    authorization: Optional[str] = Header(default=None),
+) -> object:
+    """
+    Reads: Authorization: Bearer <token>
+    Token is verified with stdlib HMAC (no extra deps).
+    Then loads User from DB (app.models.User).
+    """
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing Authorization header",
+        )
 
-    # 2) id ile ara (int'e çevrilebiliyorsa)
-    if user is None:
-        try:
-            uid = int(sub)
-            user = db.query(User).filter(User.id == uid).first()
-        except Exception:
-            user = None
+    parts = authorization.split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authorization must be: Bearer <token>",
+        )
 
-    if user is None:
-        raise HTTPException(status_code=401, detail="User not found")
+    token = parts[1].strip()
+    user_id = verify_access_token(token)
+
+    try:
+        from .models import User  # type: ignore
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="User model not found (app.models.User).",
+        ) from e
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+        )
 
     return user
