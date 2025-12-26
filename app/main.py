@@ -44,8 +44,9 @@ METRICS = {
 # -------------------------
 # Risk-7: per-user job submit limiter
 # -------------------------
-JOBS_LIMITER = SlidingWindowLimiter(per_minute=settings.jobs_rate_limit_per_minute)
-
+JOBS_LIMITER = SlidingWindowLimiter(
+    per_minute=settings.rate_limit_per_minute
+)
 # -------------------------
 # Middleware: request id + metrics + timing
 # -------------------------
