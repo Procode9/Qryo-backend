@@ -1,11 +1,9 @@
-from __future__ import annotations
-
 from typing import Generator, Optional
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
-from .db import SessionLocal
-from .models import User
+from app.db import SessionLocal
+from app.models import User
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -18,7 +16,7 @@ def get_db() -> Generator[Session, None, None]:
 
 def get_current_user(
     db: Session = Depends(get_db),
-    authorization: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(None),
 ) -> User:
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing Authorization header")
@@ -27,10 +25,7 @@ def get_current_user(
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(status_code=401, detail="Invalid Authorization header")
 
-    user = db.query(User).join(User.tokens).filter(
-        User.tokens.any(token=token)
-    ).first()
-
+    user = db.query(User).filter(User.tokens.any(token=token)).first()
     if not user:
         raise HTTPException(status_code=401, detail="Invalid token")
 
