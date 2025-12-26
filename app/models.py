@@ -3,39 +3,33 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from enum import Enum
 
-from sqlalchemy import (
-    Boolean,
-    Column,
-    DateTime,
-    ForeignKey,
-    Index,
-    String,
-)
+from sqlalchemy import Column, DateTime, ForeignKey, String, Boolean
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
 
-# -------------------------------------------------
-# Helpers
-# -------------------------------------------------
 def now_utc() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
-def new_uuid() -> str:
-    return str(uuid.uuid4())
+# -------------------------
+# Job status enum (Risk-7 hardening)
+# -------------------------
+class JobStatus(str, Enum):
+    queued = "queued"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
 
 
-# -------------------------------------------------
-# User
-# -------------------------------------------------
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(String, primary_key=True, default=new_uuid)
-    email = Column(String, unique=True, index=True, nullable=False)
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    email = Column(String, unique=True, nullable=False, index=True)
     password_hash = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), default=now_utc)
 
@@ -43,50 +37,36 @@ class User(Base):
         "UserToken",
         back_populates="user",
         cascade="all, delete-orphan",
-        passive_deletes=True,
     )
 
 
-# -------------------------------------------------
-# UserToken  (Risk-6 FINAL)
-# -------------------------------------------------
 class UserToken(Base):
     __tablename__ = "user_tokens"
 
-    # token value itself
     token = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("users.id"), index=True, nullable=False)
 
-    user_id = Column(
-        String,
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-
-    created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=now_utc)
     expires_at = Column(DateTime(timezone=True), nullable=False)
-
-    # 🔒 Risk-6 fields
     revoked = Column(Boolean, default=False, nullable=False)
-    last_used_at = Column(DateTime(timezone=True), nullable=True)
 
     user = relationship("User", back_populates="tokens")
 
-    # -------------------------
-    # helpers
-    # -------------------------
-    @staticmethod
-    def new_token() -> str:
-        # cryptographically safe, URL-friendly
-        return uuid.uuid4().hex
 
+class Job(Base):
+    __tablename__ = "jobs"
 
-# -------------------------------------------------
-# Indexes (performance + security)
-# -------------------------------------------------
-Index(
-    "ix_user_tokens_active",
-    UserToken.user_id,
-    UserToken.revoked,
-    UserToken.expires_at,
-)
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, ForeignKey("users.id"), index=True, nullable=False)
+
+    provider = Column(String, nullable=False)
+
+    # 🔒 Enum-safe ama DB String (Phase-1 migration-free)
+    status = Column(String, nullable=False, default=JobStatus.queued.value)
+
+    payload_json = Column(String, nullable=False)
+    result_json = Column(String, nullable=False)
+    error_message = Column(String, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), default=now_utc)
+    updated_at = Column(DateTime(timezone=True), default=now_utc)
