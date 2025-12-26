@@ -181,4 +181,40 @@ def require_metrics_token(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing metrics token",
+    # ---------------------------
+# Token limit enforcement
+# ---------------------------
+def enforce_user_token_limit(
+    *,
+    db: Session,
+    user_id: str,
+    max_tokens: int,
+) -> None:
+    """
+    Kullanıcının aktif (revoked=false & expire olmamış) token sayısını sınırlar.
+    Limit aşılırsa EN ESKİ tokenları revoke eder.
+    """
+
+    if max_tokens <= 0:
+        return
+
+    active_tokens = (
+        db.query(UserToken)
+        .filter(
+            UserToken.user_id == user_id,
+            UserToken.revoked == False,  # noqa
+            UserToken.expires_at > now_utc(),
+        )
+        .order_by(UserToken.created_at.asc())
+        .all()
+    )
+
+    excess = len(active_tokens) - max_tokens
+    if excess <= 0:
+        return
+
+    for tok in active_tokens[:excess]:
+        tok.revoked = True
+
+    db.commit()
     )
