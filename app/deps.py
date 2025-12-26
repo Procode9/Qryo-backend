@@ -1,14 +1,16 @@
 # app/deps.py
 from __future__ import annotations
 
-import os
-import time
 import base64
 import hashlib
 import hmac
+import os
+import time
 from typing import Generator, Optional
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header
+
+ HTTPException, status
 from sqlalchemy.orm import Session
 
 from fastapi import Request
