@@ -6,7 +6,7 @@ import datetime as dt
 import json
 import time
 import uuid
-from collections import defaultdict
+from collections import defaultdict, deque
 
 from fastapi import (
     BackgroundTasks,
@@ -50,6 +50,43 @@ METRICS = {
     "latency_ms_sum": 0.0,
     "latency_ms_count": 0,
 }
+
+# Risk-5: protect /metrics (ops token) + basic rate-limit (instance-local)
+_METRICS_CALLS = deque()  # timestamps (monotonic)
+_METRICS_RPM = int(getattr(settings, "metrics_rate_limit_per_min", 30) or 30)
+
+
+def _require_ops_token(authorization: str | None) -> None:
+    """
+    Ops-only gate:
+    Authorization: Bearer <METRICS_TOKEN>
+    """
+    token = (getattr(settings, "metrics_token", "") or "").strip()
+    if not token:
+        # Safer default: if not configured, DISABLE metrics endpoint.
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    incoming = authorization.split(" ", 1)[1].strip()
+    if incoming != token:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _metrics_rate_limit() -> None:
+    """
+    Instance-local sliding window: last 60s <= _METRICS_RPM
+    """
+    now = time.monotonic()
+    window_start = now - 60.0
+    while _METRICS_CALLS and _METRICS_CALLS[0] < window_start:
+        _METRICS_CALLS.popleft()
+
+    if len(_METRICS_CALLS) >= _METRICS_RPM:
+        raise HTTPException(status_code=429, detail="Too many requests")
+
+    _METRICS_CALLS.append(now)
 
 
 # --------------------------------------------------
@@ -111,7 +148,11 @@ def healthz():
 
 
 @app.get("/metrics")
-def metrics():
+def metrics(authorization: str | None = Header(default=None)):
+    # Risk-5 fix: secure + rate-limit
+    _require_ops_token(authorization)
+    _metrics_rate_limit()
+
     avg = (
         METRICS["latency_ms_sum"] / METRICS["latency_ms_count"]
         if METRICS["latency_ms_count"]
@@ -132,7 +173,7 @@ def root():
         "name": settings.app_name,
         "docs": "/docs",
         "health": "/healthz",
-        "metrics": "/metrics",
+        # intentionally NOT advertising /metrics publicly
     }
 
 
@@ -198,7 +239,7 @@ def logout(
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=400, detail="Invalid Authorization header")
 
-    token_value = authorization.split(" ", 1)[1]
+    token_value = authorization.split(" ", 1)[1].strip()
 
     token = db.query(UserToken).filter(UserToken.token == token_value).first()
     if token:
@@ -252,10 +293,7 @@ async def _simulate_job(job_id: str):
 
         job.status = "succeeded"
         job.result_json = json.dumps(
-            {
-                "provider": job.provider,
-                "message": "simulated quantum execution completed",
-            },
+            {"provider": job.provider, "message": "simulated quantum execution completed"},
             ensure_ascii=False,
         )
         job.updated_at = now_utc()
