@@ -17,7 +17,7 @@ class Settings:
     cors_origins: str = os.getenv("CORS_ORIGINS", "*")
 
     # App
-    app_name: str = os.getenv("APP_NAME", "Quantum Job API")
+    app_name: str = os.getenv("APP_NAME", "Quantum Discovery API")
     environment: str = os.getenv("ENVIRONMENT", "production")
 
 
