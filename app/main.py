@@ -19,6 +19,8 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from fastapi import Request
+from .rate_limit import rate_limit_check
 
 from .config import settings
 from .db import SessionLocal, engine
@@ -96,7 +98,14 @@ def _metrics_rate_limit() -> None:
 async def metrics_middleware(request: Request, call_next):
     start = time.perf_counter()
     req_id = request.headers.get("x-request-id") or str(uuid.uuid4())
-
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    # 🔒 RATE LIMIT (anon / public)
+    try:
+        rate_limit_check(request, user_id=None)
+    except HTTPException:
+        raise
+        
     try:
         response: Response = await call_next(request)
         status_code = response.status_code
