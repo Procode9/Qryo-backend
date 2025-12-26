@@ -134,8 +134,11 @@ app.add_middleware(
 # --------------------------------------------------
 # STARTUP
 # --------------------------------------------------
+from .config import assert_runtime_config
+
 @app.on_event("startup")
 def on_startup():
+    assert_runtime_config()
     Base.metadata.create_all(bind=engine)
 
 
