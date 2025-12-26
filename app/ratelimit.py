@@ -7,46 +7,46 @@ from typing import Deque, Dict
 
 from fastapi import HTTPException, Request, status
 
-# -----------------------------------
-# CONFIG (Phase-1 defaults)
-# -----------------------------------
+from .config import settings
+
+# key -> timestamps
+_BUCKETS: Dict[str, Deque[float]] = defaultdict(deque)
+
 WINDOW_SECONDS = 60
-
-LIMITS = {
-    "auth": 10,     # /auth/login, /auth/register
-    "jobs": 30,     # /jobs submit
-    "global": 120,  # everything else
-}
-
-# -----------------------------------
-# In-memory store
-# key = (ip, bucket)
-# -----------------------------------
-_store: Dict[str, Deque[float]] = defaultdict(deque)
 
 
 def _now() -> float:
     return time.time()
 
 
-def _prune(q: Deque[float], now: float):
-    while q and q[0] <= now - WINDOW_SECONDS:
-        q.popleft()
+def _cleanup(bucket: Deque[float]) -> None:
+    cutoff = _now() - WINDOW_SECONDS
+    while bucket and bucket[0] < cutoff:
+        bucket.popleft()
 
 
-def rate_limit(request: Request, bucket: str):
-    ip = request.client.host if request.client else "unknown"
-    key = f"{ip}:{bucket}"
-    now = _now()
+def rate_limit_check(request: Request, user_id: int | None) -> None:
+    """
+    Raises HTTP 429 if rate limit exceeded.
+    """
 
-    q = _store[key]
-    _prune(q, now)
+    if not settings.rate_limit_enabled:
+        return
 
-    limit = LIMITS.get(bucket, LIMITS["global"])
-    if len(q) >= limit:
+    # user-based > ip-based
+    if user_id is not None:
+        key = f"user:{user_id}"
+    else:
+        ip = request.client.host if request.client else "unknown"
+        key = f"ip:{ip}"
+
+    bucket = _BUCKETS[key]
+    _cleanup(bucket)
+
+    if len(bucket) >= settings.rate_limit_per_minute:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Rate limit exceeded ({bucket})",
+            detail="Rate limit exceeded. Please slow down.",
         )
 
-    q.append(now)
+    bucket.append(_now())
