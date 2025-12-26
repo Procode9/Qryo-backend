@@ -1,10 +1,20 @@
 # app/providers/sim.py
-from .base import Provider
-from app.core import execute_core
+from __future__ import annotations
+
+import asyncio
+from typing import Any, Dict
+
+from .base import BaseProvider
 
 
-class SimProvider(Provider):
+class SimProvider(BaseProvider):
     name = "sim"
 
-    def run(self, payload: dict) -> dict:
-        return execute_core(payload)
+    async def run(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        await asyncio.sleep(2)
+
+        return {
+            "provider": self.name,
+            "echo": payload,
+            "message": "simulated quantum execution completed",
+        }
