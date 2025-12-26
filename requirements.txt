@@ -7,3 +7,4 @@ python-dotenv==1.0.1
 passlib[bcrypt]
 python-jose
 email-validator==2.2.0
+psycopg2-binary>=2.9
