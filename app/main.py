@@ -47,6 +47,7 @@ METRICS = {
 JOBS_LIMITER = SlidingWindowLimiter(
     per_minute=settings.rate_limit_per_minute
 )
+
 # -------------------------
 # Middleware: request id + metrics + timing
 # -------------------------
@@ -55,16 +56,7 @@ async def metrics_middleware(request: Request, call_next):
     t0 = time.perf_counter()
     req_id = request.headers.get("x-request-id") or str(uuid.uuid4())
 
-    try:
-        response: Response = await call_next(request)
-    except Exception:
-        dt_ms = (time.perf_counter() - t0) * 1000.0
-        METRICS["requests_total"] += 1
-        METRICS["by_path"][request.url.path] += 1
-        METRICS["by_status"]["500"] += 1
-        METRICS["latency_ms_sum"] += dt_ms
-        METRICS["latency_ms_count"] += 1
-        raise
+    response: Response = await call_next(request)
 
     dt_ms = (time.perf_counter() - t0) * 1000.0
     METRICS["requests_total"] += 1
@@ -78,13 +70,10 @@ async def metrics_middleware(request: Request, call_next):
     return response
 
 # -------------------------
-# CORS (global use)
+# CORS
 # -------------------------
 raw = (settings.cors_origins or "*").strip()
-if raw in {"*", ""}:
-    origins = ["*"]
-else:
-    origins = [o.strip() for o in raw.split(",") if o.strip()]
+origins = ["*"] if raw in {"*", ""} else [o.strip() for o in raw.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
@@ -105,12 +94,11 @@ def healthz():
 
 @app.get("/metrics")
 def metrics(authorization: str | None = Header(default=None)):
-    # Risk-5: metrics token varsa koru
     if settings.metrics_token:
         if not authorization or authorization.strip() != f"Bearer {settings.metrics_token}":
             raise HTTPException(status_code=401, detail="Unauthorized")
 
-    avg = (METRICS["latency_ms_sum"] / METRICS["latency_ms_count"]) if METRICS["latency_ms_count"] else 0.0
+    avg = METRICS["latency_ms_sum"] / METRICS["latency_ms_count"] if METRICS["latency_ms_count"] else 0.0
     return {
         "started_at": METRICS["started_at"],
         "requests_total": METRICS["requests_total"],
@@ -121,7 +109,7 @@ def metrics(authorization: str | None = Header(default=None)):
 
 @app.get("/")
 def root():
-    return {"name": settings.app_name, "docs": "/docs", "health": "/healthz", "metrics": "/metrics"}
+    return {"name": settings.app_name}
 
 # -------------------------
 # AUTH
@@ -129,41 +117,53 @@ def root():
 @app.post("/auth/register", response_model=AuthResponse)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)):
     email = payload.email.lower().strip()
-    existing = db.query(User).filter(User.email == email).first()
-    if existing:
+    if db.query(User).filter(User.email == email).first():
         raise HTTPException(status_code=409, detail="Email already registered")
 
-    try:
-        pw_hash = hash_password(payload.password)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    user = User(email=email, password_hash=pw_hash)
+    user = User(email=email, password_hash=hash_password(payload.password))
     db.add(user)
     db.commit()
     db.refresh(user)
 
-    tok = new_token()
-    db.add(UserToken(token=tok, user_id=user.id, expires_at=expires_at(settings.token_ttl_days)))
+    # ✅ ÇÖZÜLEN NOKTA
+    enforce_user_token_limit(
+        db=db,
+        user_id=user.id,
+        max_tokens=settings.max_tokens_per_user,
+    )
+
+    token = new_token()
+    db.add(UserToken(
+        token=token,
+        user_id=user.id,
+        expires_at=expires_at(settings.token_ttl_days),
+    ))
     db.commit()
 
-    return AuthResponse(token=tok)
+    return AuthResponse(token=token)
 
 @app.post("/auth/login", response_model=AuthResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    email = payload.email.lower().strip()
-    user = db.query(User).filter(User.email == email).first()
-    if not user:
+    user = db.query(User).filter(User.email == payload.email.lower().strip()).first()
+    if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    if not verify_password(payload.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+    # ✅ ÇÖZÜLEN NOKTA
+    enforce_user_token_limit(
+        db=db,
+        user_id=user.id,
+        max_tokens=settings.max_tokens_per_user,
+    )
 
-    tok = new_token()
-    db.add(UserToken(token=tok, user_id=user.id, expires_at=expires_at(settings.token_ttl_days)))
+    token = new_token()
+    db.add(UserToken(
+        token=token,
+        user_id=user.id,
+        expires_at=expires_at(settings.token_ttl_days),
+    ))
     db.commit()
 
-    return AuthResponse(token=tok)
+    return AuthResponse(token=token)
 
 @app.post("/auth/logout")
 def logout(
@@ -171,15 +171,11 @@ def logout(
     db: Session = Depends(get_db),
     authorization: str | None = Header(default=None),
 ):
-    if not authorization or " " not in authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization")
-    token_value = authorization.split(" ", 1)[1].strip()
-
+    token_value = authorization.split(" ", 1)[1]
     token = db.query(UserToken).filter(UserToken.token == token_value).first()
     if token:
         token.revoked = True
         db.commit()
-
     return {"ok": True}
 
 @app.get("/me", response_model=MeResponse)
@@ -187,89 +183,48 @@ def me(user: User = Depends(get_current_user)):
     return MeResponse(id=user.id, email=user.email)
 
 # -------------------------
-# JOBS (phase-1 core)
+# JOBS
 # -------------------------
 def _job_to_response(job: Job) -> JobResponse:
-    try:
-        payload = json.loads(job.payload_json or "{}")
-    except Exception:
-        payload = {}
-    try:
-        result = json.loads(job.result_json or "{}")
-    except Exception:
-        result = {}
     return JobResponse(
         id=job.id,
         provider=job.provider,
         status=job.status,  # type: ignore
-        payload=payload,
-        result=result,
+        payload=json.loads(job.payload_json or "{}"),
+        result=json.loads(job.result_json or "{}"),
         error_message=job.error_message,
     )
 
-def _enforce_job_limits(user: User, req: JobSubmitRequest, db: Session) -> None:
-    # 1) payload size limit
+def _enforce_job_limits(user: User, req: JobSubmitRequest, db: Session):
     raw = json.dumps(req.payload or {}, ensure_ascii=False)
-    if len(raw.encode("utf-8")) > settings.jobs_max_payload_bytes:
-        raise HTTPException(status_code=413, detail="Payload too large")
+    if len(raw.encode()) > settings.jobs_max_payload_bytes:
+        raise HTTPException(413, "Payload too large")
 
-    # 2) per-user per-minute limiter (in-memory)
-    allowed, retry_after = JOBS_LIMITER.allow(f"user:{user.id}")
+    allowed, retry = JOBS_LIMITER.allow(f"user:{user.id}")
     if not allowed:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Too many job submissions. Retry after {retry_after}s",
-            headers={"Retry-After": str(retry_after)},
-        )
+        raise HTTPException(429, "Too many jobs", headers={"Retry-After": str(retry)})
 
-    # 3) active jobs cap (DB-backed)
-    active = (
-        db.query(Job)
-        .filter(Job.user_id == user.id, Job.status.in_(["queued", "running"]))
-        .count()
-    )
+    active = db.query(Job).filter(
+        Job.user_id == user.id,
+        Job.status.in_(["queued", "running"]),
+    ).count()
+
     if active >= settings.jobs_max_active_per_user:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Too many active jobs (max {settings.jobs_max_active_per_user}).",
-        )
+        raise HTTPException(429, "Too many active jobs")
 
 async def _simulate_job(job_id: str):
-    db: Session = SessionLocal()
+    db = SessionLocal()
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
         if not job:
             return
-
         job.status = "running"
-        job.updated_at = now_utc()
         db.commit()
-
-        await asyncio.sleep(2.0)
-
-        try:
-            payload = json.loads(job.payload_json or "{}")
-        except Exception:
-            payload = {}
-
+        await asyncio.sleep(2)
         job.status = "succeeded"
-        job.result_json = json.dumps(
-            {
-                "provider": job.provider,
-                "echo": payload,
-                "message": "simulated quantum execution completed",
-            },
-            ensure_ascii=False,
-        )
+        job.result_json = json.dumps({"ok": True})
         job.updated_at = now_utc()
         db.commit()
-    except Exception as e:
-        job = db.query(Job).filter(Job.id == job_id).first()
-        if job:
-            job.status = "failed"
-            job.error_message = str(e)
-            job.updated_at = now_utc()
-            db.commit()
     finally:
         db.close()
 
@@ -282,15 +237,11 @@ def submit_job(
 ):
     _enforce_job_limits(user, req, db)
 
-    provider = (req.provider or "sim").strip().lower()
-    if provider not in {"sim"}:
-        raise HTTPException(status_code=400, detail="Unsupported provider in phase-1 (use 'sim')")
-
     job = Job(
         user_id=user.id,
-        provider=provider,
+        provider="sim",
         status="queued",
-        payload_json=json.dumps(req.payload or {}, ensure_ascii=False),
+        payload_json=json.dumps(req.payload or {}),
         result_json="{}",
         created_at=now_utc(),
         updated_at=now_utc(),
@@ -304,18 +255,18 @@ def submit_job(
 
 @app.get("/jobs", response_model=list[JobResponse])
 def list_jobs(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    jobs = (
-        db.query(Job)
+    return [
+        _job_to_response(j)
+        for j in db.query(Job)
         .filter(Job.user_id == user.id)
         .order_by(Job.created_at.desc())
         .limit(100)
         .all()
-    )
-    return [_job_to_response(j) for j in jobs]
+    ]
 
 @app.get("/jobs/{job_id}", response_model=JobResponse)
 def get_job(job_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     job = db.query(Job).filter(Job.id == job_id, Job.user_id == user.id).first()
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(404, "Job not found")
     return _job_to_response(job)
