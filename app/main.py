@@ -171,6 +171,22 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     db.commit()
 
     return AuthResponse(token=tok)
+# app/main.py (EKLE)
+
+@app.post("/auth/logout")
+def logout(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None),
+):
+    token_value = authorization.split(" ", 1)[1]
+
+    token = db.query(UserToken).filter(UserToken.token == token_value).first()
+    if token:
+        token.revoked = True
+        db.commit()
+
+    return {"ok": True}
 
 
 @app.get("/me", response_model=MeResponse)
