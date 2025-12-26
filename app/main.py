@@ -8,7 +8,15 @@ import time
 import uuid
 from collections import defaultdict
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    Header,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
@@ -26,11 +34,14 @@ from .schemas import (
 )
 from .security import expires_at, hash_password, new_token, verify_password
 
+# --------------------------------------------------
+# APP
+# --------------------------------------------------
 app = FastAPI(title=settings.app_name)
 
-# -------------------------
-# In-memory metrics (Phase-1)
-# -------------------------
+# --------------------------------------------------
+# METRICS (Phase-1, in-memory)
+# --------------------------------------------------
 METRICS = {
     "started_at": now_utc().isoformat(),
     "requests_total": 0,
@@ -41,53 +52,38 @@ METRICS = {
 }
 
 
-# -------------------------
-# Middleware: request id + metrics + timing
-# -------------------------
+# --------------------------------------------------
+# MIDDLEWARE: request-id + metrics
+# --------------------------------------------------
 @app.middleware("http")
 async def metrics_middleware(request: Request, call_next):
-    t0 = time.perf_counter()
-
+    start = time.perf_counter()
     req_id = request.headers.get("x-request-id") or str(uuid.uuid4())
 
     try:
         response: Response = await call_next(request)
+        status_code = response.status_code
     except Exception:
-        # failed request
-        dt_ms = (time.perf_counter() - t0) * 1000.0
+        status_code = 500
+        raise
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000.0
         METRICS["requests_total"] += 1
         METRICS["by_path"][request.url.path] += 1
-        METRICS["by_status"]["500"] += 1
-        METRICS["latency_ms_sum"] += dt_ms
+        METRICS["by_status"][str(status_code)] += 1
+        METRICS["latency_ms_sum"] += duration_ms
         METRICS["latency_ms_count"] += 1
-        raise
-
-    dt_ms = (time.perf_counter() - t0) * 1000.0
-
-    METRICS["requests_total"] += 1
-    METRICS["by_path"][request.url.path] += 1
-    METRICS["by_status"][str(response.status_code)] += 1
-    METRICS["latency_ms_sum"] += dt_ms
-    METRICS["latency_ms_count"] += 1
 
     response.headers["X-Request-Id"] = req_id
-    response.headers["X-Response-Time-Ms"] = f"{dt_ms:.2f}"
+    response.headers["X-Response-Time-Ms"] = f"{duration_ms:.2f}"
     return response
 
 
-# -------------------------
-# CORS (global use)
-# -------------------------
-# settings.cors_origins: "https://a.com,https://b.com" veya "*" veya boş
-if getattr(settings, "cors_origins", None):
-    raw = settings.cors_origins.strip()
-else:
-    raw = "*"
-
-if raw == "*" or raw == "":
-    origins = ["*"]
-else:
-    origins = [o.strip() for o in raw.split(",") if o.strip()]
+# --------------------------------------------------
+# CORS (global)
+# --------------------------------------------------
+raw = getattr(settings, "cors_origins", "*") or "*"
+origins = ["*"] if raw in ("*", "") else [o.strip() for o in raw.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
@@ -98,11 +94,17 @@ app.add_middleware(
 )
 
 
+# --------------------------------------------------
+# STARTUP
+# --------------------------------------------------
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
 
 
+# --------------------------------------------------
+# HEALTH & METRICS
+# --------------------------------------------------
 @app.get("/healthz")
 def healthz():
     return {"ok": True, "ts": dt.datetime.now(dt.timezone.utc).isoformat()}
@@ -111,7 +113,7 @@ def healthz():
 @app.get("/metrics")
 def metrics():
     avg = (
-        (METRICS["latency_ms_sum"] / METRICS["latency_ms_count"])
+        METRICS["latency_ms_sum"] / METRICS["latency_ms_count"]
         if METRICS["latency_ms_count"]
         else 0.0
     )
@@ -126,17 +128,21 @@ def metrics():
 
 @app.get("/")
 def root():
-    return {"name": settings.app_name, "docs": "/docs", "health": "/healthz", "metrics": "/metrics"}
+    return {
+        "name": settings.app_name,
+        "docs": "/docs",
+        "health": "/healthz",
+        "metrics": "/metrics",
+    }
 
 
-# -------------------------
+# --------------------------------------------------
 # AUTH
-# -------------------------
+# --------------------------------------------------
 @app.post("/auth/register", response_model=AuthResponse)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)):
     email = payload.email.lower().strip()
-    existing = db.query(User).filter(User.email == email).first()
-    if existing:
+    if db.query(User).filter(User.email == email).first():
         raise HTTPException(status_code=409, detail="Email already registered")
 
     try:
@@ -149,29 +155,39 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-    tok = new_token()
-    db.add(UserToken(token=tok, user_id=user.id, expires_at=expires_at(settings.token_ttl_days)))
+    token = new_token()
+    db.add(
+        UserToken(
+            token=token,
+            user_id=user.id,
+            expires_at=expires_at(settings.token_ttl_days),
+        )
+    )
     db.commit()
 
-    return AuthResponse(token=tok)
+    return AuthResponse(token=token)
 
 
 @app.post("/auth/login", response_model=AuthResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
     email = payload.email.lower().strip()
     user = db.query(User).filter(User.email == email).first()
-    if not user:
+
+    if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    if not verify_password(payload.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    tok = new_token()
-    db.add(UserToken(token=tok, user_id=user.id, expires_at=expires_at(settings.token_ttl_days)))
+    token = new_token()
+    db.add(
+        UserToken(
+            token=token,
+            user_id=user.id,
+            expires_at=expires_at(settings.token_ttl_days),
+        )
+    )
     db.commit()
 
-    return AuthResponse(token=tok)
-# app/main.py (EKLE)
+    return AuthResponse(token=token)
+
 
 @app.post("/auth/logout")
 def logout(
@@ -179,6 +195,9 @@ def logout(
     db: Session = Depends(get_db),
     authorization: str | None = Header(default=None),
 ):
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=400, detail="Invalid Authorization header")
+
     token_value = authorization.split(" ", 1)[1]
 
     token = db.query(UserToken).filter(UserToken.token == token_value).first()
@@ -194,18 +213,20 @@ def me(user: User = Depends(get_current_user)):
     return MeResponse(id=user.id, email=user.email)
 
 
-# -------------------------
-# JOBS (phase-1 core)
-# -------------------------
+# --------------------------------------------------
+# JOBS (Phase-1 core)
+# --------------------------------------------------
 def _job_to_response(job: Job) -> JobResponse:
     try:
         payload = json.loads(job.payload_json or "{}")
     except Exception:
         payload = {}
+
     try:
         result = json.loads(job.result_json or "{}")
     except Exception:
         result = {}
+
     return JobResponse(
         id=job.id,
         provider=job.provider,
@@ -227,18 +248,12 @@ async def _simulate_job(job_id: str):
         job.updated_at = now_utc()
         db.commit()
 
-        await asyncio.sleep(2.0)
-
-        try:
-            payload = json.loads(job.payload_json or "{}")
-        except Exception:
-            payload = {}
+        await asyncio.sleep(2)
 
         job.status = "succeeded"
         job.result_json = json.dumps(
             {
                 "provider": job.provider,
-                "echo": payload,
                 "message": "simulated quantum execution completed",
             },
             ensure_ascii=False,
@@ -264,8 +279,8 @@ def submit_job(
     db: Session = Depends(get_db),
 ):
     provider = (req.provider or "sim").strip().lower()
-    if provider not in {"sim"}:
-        raise HTTPException(status_code=400, detail="Unsupported provider in phase-1 (use 'sim')")
+    if provider != "sim":
+        raise HTTPException(status_code=400, detail="Only 'sim' provider supported in phase-1")
 
     job = Job(
         user_id=user.id,
