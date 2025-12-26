@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Generator, Optional
+from typing import Generator, Optional, Set
 
 from fastapi import Depends, Header, HTTPException, status, Request
 from sqlalchemy.orm import Session
@@ -10,9 +10,9 @@ from .models import User, UserToken, now_utc
 from .config import settings
 
 
-# ---------------------------
+# =====================================================
 # DB dependency
-# ---------------------------
+# =====================================================
 def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:
@@ -21,9 +21,9 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
-# ---------------------------
+# =====================================================
 # Auth dependency
-# ---------------------------
+# =====================================================
 def get_current_user(
     db: Session = Depends(get_db),
     authorization: Optional[str] = Header(default=None),
@@ -90,119 +90,27 @@ def get_current_user(
 
 
 # =====================================================
-# HELPER FUNCTIONS (Phase-1 completion)
+# HELPER FUNCTIONS (Phase-1 FINAL)
 # =====================================================
 
 # -----------------------------------------------------
-# 1. Token limit enforcement (Risk-6)
+# 1. Token limit enforcement (Risk-6) ✅
 # -----------------------------------------------------
 def enforce_user_token_limit(db: Session, user: User) -> None:
     """
-    Kullanıcının aktif (revoked=false, expire olmamış) token sayısını kontrol eder.
-    Limit aşılmışsa yeni token oluşturulmasına izin vermez.
-    """
-
-    active_tokens_count = (
-        db.query(UserToken)
-        .filter(
-            UserToken.user_id == user.id,
-            UserToken.revoked.is_(False),
-            UserToken.expires_at > now_utc(),
-        )
-        .count()
-    )
-
-    if active_tokens_count >= settings.max_tokens_per_user:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Maximum active token limit reached",
-        )
-
-
-# -----------------------------------------------------
-# 2. Rate-limit bypass logic (Risk-4 hardening)
-# -----------------------------------------------------
-def should_bypass_rate_limit(
-    request: Request,
-    user: Optional[User] = None,
-) -> bool:
-    """
-    Aşağıdaki durumlarda rate-limit bypass edilir:
-    - Rate limit kapalıysa
-    - Metrics endpoint
-    - Admin email listesinde olan kullanıcı
-    - Internal Render healthcheck
-    """
-
-    if not settings.rate_limit_enabled:
-        return True
-
-    path = request.url.path
-
-    # Metrics endpoint her zaman bypass
-    if path.startswith("/metrics"):
-        return True
-
-    # Healthcheck / internal probe
-    if path in {"/health", "/"}:
-        return True
-
-    # Admin kullanıcılar
-    if user and settings.admin_emails:
-        admins = {e.strip().lower() for e in settings.admin_emails.split(",")}
-        if user.email.lower() in admins:
-            return True
-
-    return False
-
-
-# -----------------------------------------------------
-# 3. Metrics endpoint token guard (Risk-5)
-# -----------------------------------------------------
-def require_metrics_token(
-    x_metrics_token: Optional[str] = Header(default=None),
-) -> None:
-    """
-    /metrics endpointi için özel token koruması.
-    PROD ortamında zorunlu.
-    """
-
-    # Dev ortamında serbest
-    if settings.env != "production":
-        return
-
-    if not settings.metrics_token:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Metrics token not configured",
-        )
-
-    if not x_metrics_token or x_metrics_token != settings.metrics_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing metrics token",
-    # ---------------------------
-# Token limit enforcement
-# ---------------------------
-def enforce_user_token_limit(
-    *,
-    db: Session,
-    user_id: str,
-    max_tokens: int,
-) -> None:
-    """
     Kullanıcının aktif (revoked=false & expire olmamış) token sayısını sınırlar.
-    Limit aşılırsa EN ESKİ tokenları revoke eder.
+    Limit aşılırsa EN ESKİ tokenlar otomatik revoke edilir.
     """
 
+    max_tokens = settings.max_tokens_per_user
     if max_tokens <= 0:
         return
 
     active_tokens = (
         db.query(UserToken)
         .filter(
-            UserToken.user_id == user_id,
-            UserToken.revoked == False,  # noqa
+            UserToken.user_id == user.id,
+            UserToken.revoked.is_(False),
             UserToken.expires_at > now_utc(),
         )
         .order_by(UserToken.created_at.asc())
@@ -217,4 +125,69 @@ def enforce_user_token_limit(
         tok.revoked = True
 
     db.commit()
-    )
+
+
+# -----------------------------------------------------
+# 2. Rate-limit bypass logic (Risk-4) ✅
+# -----------------------------------------------------
+def should_bypass_rate_limit(
+    request: Request,
+    user: Optional[User] = None,
+) -> bool:
+    """
+    Aşağıdaki durumlarda rate-limit bypass edilir:
+    - Rate limit kapalıysa
+    - Metrics endpoint
+    - Admin email listesinde olan kullanıcı
+    - Internal healthcheck
+    """
+
+    if not settings.rate_limit_enabled:
+        return True
+
+    path = request.url.path
+
+    if path.startswith("/metrics"):
+        return True
+
+    if path in {"/healthz", "/"}:
+        return True
+
+    if user and settings.admin_emails:
+        admins: Set[str] = {
+            e.strip().lower()
+            for e in settings.admin_emails.split(",")
+            if e.strip()
+        }
+        if user.email.lower() in admins:
+            return True
+
+    return False
+
+
+# -----------------------------------------------------
+# 3. Metrics endpoint token guard (Risk-5) ✅
+# -----------------------------------------------------
+def require_metrics_token(
+    authorization: Optional[str] = Header(default=None),
+) -> None:
+    """
+    /metrics endpointi için token koruması.
+    PROD ortamında zorunlu.
+    """
+
+    if settings.env != "production":
+        return
+
+    if not settings.metrics_token:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Metrics token not configured",
+        )
+
+    expected = f"Bearer {settings.metrics_token}"
+    if not authorization or authorization.strip() != expected:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing metrics token",
+        )
