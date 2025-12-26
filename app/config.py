@@ -5,46 +5,50 @@ import os
 from pydantic import BaseModel, Field
 
 
+def _env(name: str, default: str) -> str:
+    return (os.getenv(name, default) or default).strip()
+
+
 class Settings(BaseModel):
     # -----------------------------
     # App
     # -----------------------------
-    app_name: str = Field(default_factory=lambda: os.getenv("APP_NAME", "Start QuAntUm"))
-    env: str = Field(default_factory=lambda: os.getenv("APP_ENV", "development"))
+    app_name: str = Field(default_factory=lambda: _env("APP_NAME", "Start QuAntUm"))
+    env: str = Field(default_factory=lambda: _env("APP_ENV", "development").lower())
     # development | production
 
     # -----------------------------
     # Database
     # -----------------------------
-    database_url: str = Field(default_factory=lambda: os.getenv("DATABASE_URL", "sqlite:///./data.db"))
+    database_url: str = Field(default_factory=lambda: _env("DATABASE_URL", "sqlite:///./data.db"))
 
     # -----------------------------
     # CORS
     # -----------------------------
-    cors_origins: str = Field(default_factory=lambda: os.getenv("CORS_ORIGINS", "*"))
+    cors_origins: str = Field(default_factory=lambda: _env("CORS_ORIGINS", "*"))
 
     # -----------------------------
     # Auth / Security
     # -----------------------------
-    token_ttl_days: int = Field(default_factory=lambda: int(os.getenv("TOKEN_TTL_DAYS", "7")))
-    max_tokens_per_user: int = Field(default_factory=lambda: int(os.getenv("MAX_TOKENS_PER_USER", "5")))
+    token_ttl_days: int = Field(default_factory=lambda: int(_env("TOKEN_TTL_DAYS", "7")))
+    max_tokens_per_user: int = Field(default_factory=lambda: int(_env("MAX_TOKENS_PER_USER", "5")))
 
     # -----------------------------
     # Rate limit (Risk-4)
     # -----------------------------
-    rate_limit_enabled: bool = Field(default_factory=lambda: os.getenv("RATE_LIMIT_ENABLED", "0") == "1")
-    rate_limit_per_minute: int = Field(default_factory=lambda: int(os.getenv("RATE_LIMIT_PER_MINUTE", "60")))
+    rate_limit_enabled: bool = Field(default_factory=lambda: _env("RATE_LIMIT_ENABLED", "0") == "1")
+    rate_limit_per_minute: int = Field(default_factory=lambda: int(_env("RATE_LIMIT_PER_MINUTE", "60")))
 
     # -----------------------------
     # Metrics / Ops (Risk-5)
     # -----------------------------
-    metrics_token: str = Field(default_factory=lambda: os.getenv("METRICS_TOKEN", ""))  # empty => dev açık
-    metrics_rate_limit_per_min: int = Field(default_factory=lambda: int(os.getenv("METRICS_RATE_LIMIT_PER_MIN", "30")))
+    metrics_token: str = Field(default_factory=lambda: _env("METRICS_TOKEN", ""))  # empty => dev açık
+    metrics_rate_limit_per_min: int = Field(default_factory=lambda: int(_env("METRICS_RATE_LIMIT_PER_MIN", "30")))
 
     # -----------------------------
     # Admin / Ops
     # -----------------------------
-    admin_emails: str = Field(default_factory=lambda: os.getenv("ADMIN_EMAILS", ""))  # "a@x.com,b@y.com"
+    admin_emails: str = Field(default_factory=lambda: _env("ADMIN_EMAILS", ""))  # "a@x.com,b@y.com"
 
 
 settings = Settings()
