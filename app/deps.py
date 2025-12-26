@@ -11,6 +11,9 @@ from typing import Generator, Optional
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
+from fastapi import Request
+from .rate_limit import rate_limit_check
+
 from .db import SessionLocal
 from .models import User, UserToken, now_utc
 
@@ -88,6 +91,20 @@ def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing Authorization header",
+ def get_current_user(
+    request: Request,
+    db: Session = Depends(get_db),
+    authorization: Optional[str] = Header(default=None),
+):
+    ...
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    # 🔒 RATE LIMIT (user-based)
+    rate_limit_check(request, user.id)
+
+    return user          
         )
 
     parts = authorization.split(" ", 1)
