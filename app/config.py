@@ -9,12 +9,22 @@ def _env(name: str, default: str) -> str:
     return (os.getenv(name, default) or default).strip()
 
 
-class Settings(BaseModel):
-    # -----------------------------
-    # App
-    # -----------------------------
-    app_name: str = Field(default_factory=lambda: _env("APP_NAME", "Start QuAntUm"))
-    env: str = Field(default_factory=lambda: _env("APP_ENV", "development").lower())
+@@ class Settings(BaseModel):
+     # -----------------------------
+     # Rate limit (Risk-4)
+     # -----------------------------
+     rate_limit_enabled: bool = Field(default_factory=lambda: os.getenv("RATE_LIMIT_ENABLED", "0") == "1")
+     rate_limit_per_minute: int = Field(default_factory=lambda: int(os.getenv("RATE_LIMIT_PER_MINUTE", "60")))
+
++    # -----------------------------
++    # Jobs limits (Phase-1)
++    # -----------------------------
++    jobs_max_payload_bytes: int = Field(
++        default_factory=lambda: int(os.getenv("JOBS_MAX_PAYLOAD_BYTES", "65536"))  # 64 KB
++    )
++    jobs_max_active_per_user: int = Field(
++        default_factory=lambda: int(os.getenv("JOBS_MAX_ACTIVE_PER_USER", "3"))
++    )
     # development | production
 
     # -----------------------------
