@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings, assert_runtime_config
 from .db import SessionLocal, engine
-from .deps import get_current_user, get_db
+from .deps import get_current_user, get_db, enforce_user_token_limit
 from .limits import SlidingWindowLimiter
 from .models import Base, Job, User, UserToken, now_utc
 from .schemas import (
